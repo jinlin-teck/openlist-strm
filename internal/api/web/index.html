@@ -142,6 +142,19 @@
         <label>Cron 表达式（6 段：秒 分 时 日 月 星期）</label>
         <input id="t-cron" placeholder="0 0 3 * * * （留空表示仅手动触发）">
       </div>
+      <div class="field">
+        <label>变动监控间隔（秒）</label>
+        <input id="t-watch" type="number" min="0" placeholder="0">
+        <span class="hint">0 关闭；检测到远端文件变化后自动生成，最小 10 秒</span>
+      </div>
+      <div class="field">
+        <label>监控方式</label>
+        <select id="t-watch-mode">
+          <option value="fingerprint">递归指纹 — 本地存储推荐</option>
+          <option value="dir_count">目录计数 — 网盘存储推荐</option>
+        </select>
+        <span class="hint">目录计数每次轮询仅 1 次 API 请求，避免网盘风控；但无法检出目录内部的文件变动</span>
+      </div>
       <div class="field full">
         <label>OpenList 源目录 *</label>
         <input id="t-source" placeholder="/nas/movies">
@@ -262,7 +275,9 @@ function renderTasks() {
         <span class="name">${esc(t.name || t.id)}</span>
         <span class="badge gray">${esc(t.id)}</span>
         <span class="badge">${MODE_LABEL[t.mode] || t.mode}</span>
-        ${t.cron ? `<span class="badge amber" title="cron">⏱ ${esc(t.cron)}</span>` : '<span class="badge gray">仅手动</span>'}
+        ${t.cron ? `<span class="badge amber" title="cron">⏱ ${esc(t.cron)}</span>` : ''}
+        ${t.watch_interval ? `<span class="badge green" title="变动监控">👁 ${t.watch_interval}s${t.watch_mode === 'dir_count' ? ' 计数' : ''}</span>` : ''}
+        ${!t.cron && !t.watch_interval ? '<span class="badge gray">仅手动</span>' : ''}
         ${t.overwrite ? '<span class="badge gray">覆盖</span>' : ''}
         ${t.sync_delete ? '<span class="badge gray">同步删除</span>' : ''}
         ${t.download?.enable ? '<span class="badge gray">下载伴生</span>' : ''}
@@ -354,6 +369,8 @@ function openTaskModal(task) {
   $('t-id').disabled = !!task;
   $('t-name').value = task?.name || '';
   $('t-cron').value = task?.cron || '';
+  $('t-watch').value = task?.watch_interval || 0;
+  $('t-watch-mode').value = task?.watch_mode || 'fingerprint';
   $('t-source').value = task?.source_dir || '';
   $('t-target').value = task?.target_dir || '';
   $('t-mode').value = task?.mode === 'local_path' ? 'path_replace' : (task?.mode || 'alist_url');
@@ -381,6 +398,8 @@ $('btn-save-task').onclick = async () => {
     id: $('t-id').value.trim(),
     name: $('t-name').value.trim(),
     cron: $('t-cron').value.trim(),
+    watch_interval: parseInt($('t-watch').value) || 0,
+    watch_mode: $('t-watch-mode').value,
     source_dir: $('t-source').value.trim(),
     target_dir: $('t-target').value.trim(),
     mode: $('t-mode').value,

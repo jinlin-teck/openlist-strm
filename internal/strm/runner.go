@@ -4,6 +4,7 @@ package strm
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +89,7 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 		dir := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		items, err := r.client.List(ctx, dir)
+		items, err := r.client.List(ctx, dir, false)
 		if err != nil {
 			log.Warn("列目录失败，跳过", "dir", dir, "err", err)
 			mu.Lock()
@@ -213,6 +215,63 @@ func (r *Runner) strmContent(ctx context.Context, task config.TaskConfig, basePa
 		return task.PrefixTo + strings.TrimPrefix(raw, task.URLPrefix), nil
 	}
 	return "", fmt.Errorf("未知 mode %q", task.Mode)
+}
+
+// Fingerprint 递归扫描任务源目录，对全部受管文件（视频 + 伴生）的
+// "路径:大小" 计算 FNV-1a 指纹，用于变更检测。使用 refresh 绕过服务端缓存。
+func (r *Runner) Fingerprint(ctx context.Context, task config.TaskConfig) (uint64, error) {
+	exts := map[string]bool{}
+	for _, e := range task.Exts() {
+		exts[e] = true
+	}
+	for e := range task.DownloadExts() {
+		exts[e] = true
+	}
+
+	var entries []string
+	stack := []string{task.SourceDir}
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		dir := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		items, err := r.client.List(ctx, dir, true)
+		if err != nil {
+			return 0, fmt.Errorf("列目录 %s 失败: %w", dir, err)
+		}
+		for _, it := range items {
+			if skipNames[it.Name] {
+				continue
+			}
+			full := joinPath(dir, it.Name)
+			if it.IsDir {
+				stack = append(stack, full)
+				continue
+			}
+			if exts[strings.ToLower(path.Ext(it.Name))] {
+				entries = append(entries, fmt.Sprintf("%s:%d", full, it.Size))
+			}
+		}
+	}
+	sort.Strings(entries)
+	h := fnv.New64a()
+	for _, e := range entries {
+		h.Write([]byte(e))
+		h.Write([]byte{0})
+	}
+	return h.Sum64(), nil
+}
+
+// DirCount 返回源目录直属子项数量，作为轻量变更指纹（dir_count 监控方式）。
+// 无法检出目录内部的新增/删除，但每次轮询只需 1 次 API 调用，适合网盘存储。
+func (r *Runner) DirCount(ctx context.Context, task config.TaskConfig) (uint64, error) {
+	total, err := r.client.Total(ctx, task.SourceDir, true)
+	if err != nil {
+		return 0, fmt.Errorf("列目录 %s 失败: %w", task.SourceDir, err)
+	}
+	return uint64(total), nil
 }
 
 // downloadOne 下载伴生文件到目标目录同名位置。返回是否真正写入。

@@ -10,6 +10,9 @@ tasks:
   - id: "movie"                           # 任务唯一 ID
     name: "电影"                          # 显示名称
     cron: "0 0 3 * * *"                   # 6 段 cron（秒 分 时 日 月 星期），留空则仅手动触发
+    watch_interval: 0                     # 变动监控间隔（秒），0 关闭；检测到远端变化后自动生成（最小 10）
+    watch_mode: "fingerprint"             # 监控方式：fingerprint 递归指纹（本地存储，能检出深层变动）
+                                          #            dir_count 目录计数（网盘存储，每轮仅 1 次 API 请求，防风控）
     source_dir: "/nas/movies"             # OpenList 上的源目录
     target_dir: "/media/movies"           # 本地 strm 输出目录
     mode: "path_replace"                  # strm 内容模式：alist_url / path_replace / raw_url / alist_path

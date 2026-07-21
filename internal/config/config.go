@@ -41,22 +41,30 @@ var validModes = map[string]bool{
 	ModePathReplace: true,
 }
 
+// 监控方式。
+const (
+	WatchFingerprint = "fingerprint" // 递归扫描全部文件算指纹，能检出深层文件变化，适合本地存储
+	WatchDirCount    = "dir_count"   // 仅对比源目录直属子项数量，每次 1 次 API 调用，适合网盘存储
+)
+
 // TaskConfig 描述一个 STRM 生成任务。
 type TaskConfig struct {
-	ID          string         `yaml:"id" json:"id"`
-	Name        string         `yaml:"name" json:"name"`
-	Cron        string         `yaml:"cron" json:"cron"` // 6 段 cron（带秒），留空表示仅手动触发
-	SourceDir   string         `yaml:"source_dir" json:"source_dir"`
-	TargetDir   string         `yaml:"target_dir" json:"target_dir"`
-	Mode        string         `yaml:"mode" json:"mode"`
-	URLPrefix   string         `yaml:"url_prefix" json:"url_prefix"` // path_replace 模式：被替换的 URL 前缀
-	PrefixTo    string         `yaml:"prefix_to" json:"prefix_to"`   // path_replace 模式：替换为（留空即仅去除前缀）
-	URLEncode   *bool          `yaml:"url_encode" json:"url_encode"` // path_replace 模式：路径是否 URL 编码，默认 true
-	Overwrite   bool           `yaml:"overwrite" json:"overwrite"`
-	Concurrency int            `yaml:"concurrency" json:"concurrency"`
-	VideoExts   []string       `yaml:"video_exts" json:"video_exts"`   // 留空使用默认视频后缀
-	SyncDelete  bool           `yaml:"sync_delete" json:"sync_delete"` // 删除远端已不存在的本地 strm
-	Download    DownloadConfig `yaml:"download" json:"download"`       // 伴生文件下载
+	ID            string         `yaml:"id" json:"id"`
+	Name          string         `yaml:"name" json:"name"`
+	Cron          string         `yaml:"cron" json:"cron"`                     // 6 段 cron（带秒），留空表示仅手动触发
+	WatchInterval int            `yaml:"watch_interval" json:"watch_interval"` // 变动监控间隔（秒），0 关闭；检测到远端变化后自动生成
+	WatchMode     string         `yaml:"watch_mode" json:"watch_mode"`         // 监控方式：fingerprint（递归指纹）/ dir_count（目录计数）
+	SourceDir     string         `yaml:"source_dir" json:"source_dir"`
+	TargetDir     string         `yaml:"target_dir" json:"target_dir"`
+	Mode          string         `yaml:"mode" json:"mode"`
+	URLPrefix     string         `yaml:"url_prefix" json:"url_prefix"` // path_replace 模式：被替换的 URL 前缀
+	PrefixTo      string         `yaml:"prefix_to" json:"prefix_to"`   // path_replace 模式：替换为（留空即仅去除前缀）
+	URLEncode     *bool          `yaml:"url_encode" json:"url_encode"` // path_replace 模式：路径是否 URL 编码，默认 true
+	Overwrite     bool           `yaml:"overwrite" json:"overwrite"`
+	Concurrency   int            `yaml:"concurrency" json:"concurrency"`
+	VideoExts     []string       `yaml:"video_exts" json:"video_exts"`   // 留空使用默认视频后缀
+	SyncDelete    bool           `yaml:"sync_delete" json:"sync_delete"` // 删除远端已不存在的本地 strm
+	Download      DownloadConfig `yaml:"download" json:"download"`       // 伴生文件下载
 }
 
 // DownloadConfig 描述伴生文件（字幕/图片/NFO 等）下载。
@@ -165,6 +173,9 @@ func (c *Config) Validate() error {
 		if mode == ModePathReplace && strings.TrimSpace(t.URLPrefix) == "" {
 			return fmt.Errorf("task %q: path_replace 模式必须配置 url_prefix", t.ID)
 		}
+		if t.WatchMode != "" && t.WatchMode != WatchFingerprint && t.WatchMode != WatchDirCount {
+			return fmt.Errorf("task %q: 非法 watch_mode %q", t.ID, t.WatchMode)
+		}
 	}
 	return nil
 }
@@ -187,6 +198,15 @@ func (c *Config) Normalize() {
 		}
 		if t.Concurrency <= 0 {
 			t.Concurrency = 50
+		}
+		if t.WatchInterval < 0 {
+			t.WatchInterval = 0
+		}
+		if t.WatchInterval > 0 && t.WatchInterval < 10 {
+			t.WatchInterval = 10 // 防止过密轮询打爆服务器
+		}
+		if t.WatchMode == "" {
+			t.WatchMode = WatchFingerprint
 		}
 		if t.Download.Enable && t.Download.Concurrency <= 0 {
 			t.Download.Concurrency = 5

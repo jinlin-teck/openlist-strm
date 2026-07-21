@@ -12,34 +12,116 @@
   - `alist_path`：Alist 内部路径
 - **伴生文件下载**：可选下载字幕（.ass/.srt/.ssa/.sub）、图片（.png/.jpg/.jpeg）、NFO 及自定义后缀文件
 - **仅令牌认证**：只使用 OpenList API Token，不支持用户名密码
-- **定时 + 手动**：6 段 cron（秒 分 时 日 月 星期）定时执行；也可通过 WebUI 或 API 手动触发
+- **三种触发方式**
+  - 定时：6 段 cron（秒 分 时 日 月 星期）
+  - 手动：WebUI 按钮或 API 触发指定任务
+  - 变动监控：按 `watch_interval` 轮询，检测到变化才自动生成（见下文「变动监控」）
 - **WebUI**：修改全部配置（热加载，无需重启）、查看运行状态与统计、手动运行任务
 - 并发扫描、断点跳过（`overwrite: false` 时跳过已存在文件）、可选同步删除（带 0 扫描保护）
 
 ## 快速开始
 
+### 方式一：下载预编译二进制
+
+从 [Releases](https://github.com/jinlin-teck/openlist-strm/releases) 下载对应平台的二进制，然后：
+
 ```bash
-go build -o openlist-strm .
-cp config.example.yaml config.yaml   # 编辑填入 base_url 与 token
+chmod +x openlist-strm
+cp config.example.yaml config.yaml   # 编辑填入 OpenList 地址与令牌
 ./openlist-strm --config config.yaml
 ```
 
-打开 `http://localhost:8080` 进入 WebUI。
+### 方式二：从源码构建
+
+需要 Go 1.24+：
+
+```bash
+git clone https://github.com/jinlin-teck/openlist-strm.git
+cd openlist-strm
+go build -o openlist-strm .
+cp config.example.yaml config.yaml   # 编辑填入 OpenList 地址与令牌
+./openlist-strm --config config.yaml
+```
+
+为其他平台交叉编译（示例：ARM 架构 NAS）：
+
+```bash
+GOOS=linux GOARCH=arm64 go build -o openlist-strm-linux-arm64 .
+```
+
+### 后台运行
+
+```bash
+# nohup 简易方式
+nohup ./openlist-strm --config config.yaml > openlist-strm.log 2>&1 &
+
+# 或 systemd 服务（/etc/systemd/system/openlist-strm.service）
+[Unit]
+Description=openlist-strm
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/openlist-strm
+ExecStart=/opt/openlist-strm/openlist-strm --config /opt/openlist-strm/config.yaml
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动后打开 `http://<主机IP>:8080` 进入 WebUI，之后所有配置均可在 WebUI 中修改（热加载，无需重启）。
+
+命令行参数：`--config` 指定配置文件路径（默认 `config.yaml`）；`--debug` 输出调试日志。
 
 ## 配置说明
 
 见 `config.example.yaml`。关键字段：
 
-| 字段 | 说明 |
-|---|---|
-| `alist.base_url` / `alist.token` | OpenList 地址与令牌 |
-| `tasks[].mode` | `path_replace` / `alist_url` / `raw_url` / `alist_path` |
-| `tasks[].url_prefix` | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |
-| `tasks[].prefix_to` | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径 |
-| `tasks[].url_encode` | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false` |
-| `tasks[].cron` | 6 段 cron，留空则仅手动触发 |
-| `tasks[].sync_delete` | 删除远端已不存在的本地 strm（本次扫描为 0 时自动跳过删除） |
-| `tasks[].download` | 伴生文件下载：`enable`/`subtitle`/`image`/`nfo`/`other_ext`/`concurrency` |
+| 字段                                        | 说明                                                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------- |
+| `server.listen`                             | WebUI/API 监听地址，默认 `:8080`                                             |
+| `alist.base_url` / `alist.token`            | OpenList 地址与令牌                                                          |
+| `alist.wait_time`                           | API 请求最小间隔（毫秒），0 不限速                                           |
+| `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                         |
+| `tasks[].mode`                              | `path_replace` / `alist_url` / `raw_url` / `alist_path`                      |
+| `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |
+| `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径                  |
+| `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`               |
+| `tasks[].cron`                              | 6 段 cron，留空则仅手动触发                                                  |
+| `tasks[].watch_interval`                    | 变动监控间隔（秒），0 关闭，最小 10；检测到变化才触发生成                    |
+| `tasks[].watch_mode`                        | `fingerprint`（默认）/ `dir_count`，见下文「变动监控」                       |
+| `tasks[].overwrite`                         | 覆盖已存在的 strm / 伴生文件，默认 `false`（存在且大小一致则跳过）           |
+| `tasks[].concurrency`                       | 任务并发处理数，默认 50                                                      |
+| `tasks[].video_exts`                        | 视频后缀列表，留空用默认（mp4/mkv/flv/avi/wmv/ts/rmvb/webm/mpg/m2ts/mov）    |
+| `tasks[].sync_delete`                       | 删除远端已不存在的本地 strm（本次扫描为 0 时自动跳过删除）                   |
+| `tasks[].download`                          | 伴生文件下载：`enable`/`subtitle`/`image`/`nfo`/`other_ext`/`concurrency`    |
+
+## 变动监控
+
+OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https://github.com/orgs/OpenListTeam/discussions/1066)），只能通过轮询检测。本项目提供两种监控方式，按任务选择：
+
+|                                  | `fingerprint`（默认）                         | `dir_count`        |
+| -------------------------------- | --------------------------------------------- | ------------------ |
+| 检测信号                         | 递归全部目录，对受管文件的「路径+大小」算指纹 | 源目录直属子项数量 |
+| 每轮 API 请求                    | N 次（N = 目录数）                            | 1 次               |
+| 目录内部新增文件（如电视剧更剧） | 能检出                                        | **不能检出**       |
+| 同名文件替换（大小变化）         | 能检出                                        | 不能检出           |
+| 适用                             | 本地 NAS 存储                                 | 网盘存储（防风控） |
+
+说明：
+
+- 指纹扫描使用 `refresh=true` 绕过服务端缓存；网盘存储会强制回源列表，请把 `watch_interval` 调大（如 1800s）
+- 监控触发与定时/手动触发共用任务锁，同一任务不会并发执行
+- 启动 watcher 后会立即全量执行一次任务
+
+## STRM 内容模式
+
+| 模式           | strm 内容                   | 适用场景                                                |
+| -------------- | --------------------------- | ------------------------------------------------------- |
+| `path_replace` | 前缀替换后的路径            | Emby 直接读本地/挂载路径（推荐）                        |
+| `alist_url`    | OpenList 下载直链（带签名） | 经 OpenList 播放                                        |
+| `raw_url`      | 上游存储真实直链            | 绕过 OpenList 播放（每次运行多一次 `/api/fs/get` 调用） |
+| `alist_path`   | OpenList 内部路径           | 配合 MediaWarp 等 302 重定向方案                        |
 
 `path_replace` 模式示例：
 
@@ -56,10 +138,10 @@ strm 内容: /mnt/rclone/nas/mnt/.../英雄本色2 (1987)/英雄本色2 (1987) -
 
 ## API
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/config` | 读取当前配置 |
-| PUT | `/api/config` | 保存配置并热加载 |
-| GET | `/api/tasks` | 任务列表（含运行状态、统计、下次触发时间） |
-| POST | `/api/tasks/{id}/run` | 手动触发指定任务 |
-| POST | `/api/alist/test` | 测试连接 `{base_url, token}` |
+| 方法 | 路径                  | 说明                                       |
+| ---- | --------------------- | ------------------------------------------ |
+| GET  | `/api/config`         | 读取当前配置                               |
+| PUT  | `/api/config`         | 保存配置并热加载                           |
+| GET  | `/api/tasks`          | 任务列表（含运行状态、统计、下次触发时间） |
+| POST | `/api/tasks/{id}/run` | 手动触发指定任务                           |
+| POST | `/api/alist/test`     | 测试连接 `{base_url, token}`               |

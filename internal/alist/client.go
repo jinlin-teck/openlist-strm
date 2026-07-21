@@ -130,18 +130,32 @@ type fsListReq struct {
 
 type fsListData struct {
 	Content []FsItem `json:"content"`
+	Total   int      `json:"total"`
 }
 
 // List 列出目录全部内容（per_page=0 表示不分页）。
-func (c *Client) List(ctx context.Context, path string) ([]FsItem, error) {
+// refresh 为 true 时强制绕过服务端缓存重新拉取存储列表。
+func (c *Client) List(ctx context.Context, path string, refresh bool) ([]FsItem, error) {
 	var data fsListData
 	err := c.do(ctx, http.MethodPost, "/api/fs/list", fsListReq{
-		Path: path, Page: 1, PerPage: 0,
+		Path: path, Refresh: refresh, Page: 1, PerPage: 0,
 	}, &data)
 	if err != nil {
 		return nil, err
 	}
 	return data.Content, nil
+}
+
+// Total 返回目录直属子项数量（含文件和子目录），用于轻量变更检测。
+func (c *Client) Total(ctx context.Context, path string, refresh bool) (int, error) {
+	var data fsListData
+	err := c.do(ctx, http.MethodPost, "/api/fs/list", fsListReq{
+		Path: path, Refresh: refresh, Page: 1, PerPage: 1,
+	}, &data)
+	if err != nil {
+		return 0, err
+	}
+	return data.Total, nil
 }
 
 type fsGetReq struct {

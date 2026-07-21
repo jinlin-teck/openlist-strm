@@ -36,6 +36,9 @@ type App struct {
 	sched   *cron.Cron
 	entries map[string]cron.EntryID
 
+	watchMu      sync.Mutex
+	watchCancels map[string]context.CancelFunc
+
 	statusMu sync.Mutex
 	status   map[string]*TaskStatus
 }
@@ -47,11 +50,12 @@ func New(cfgPath string, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	a := &App{
-		cfgPath: cfgPath,
-		log:     log,
-		sched:   cron.New(cron.WithSeconds()),
-		entries: map[string]cron.EntryID{},
-		status:  map[string]*TaskStatus{},
+		cfgPath:      cfgPath,
+		log:          log,
+		sched:        cron.New(cron.WithSeconds()),
+		entries:      map[string]cron.EntryID{},
+		watchCancels: map[string]context.CancelFunc{},
+		status:       map[string]*TaskStatus{},
 	}
 	a.applyConfig(cfg)
 	a.sched.Start()
@@ -85,6 +89,67 @@ func (a *App) applyConfig(cfg *config.Config) {
 		}
 		a.entries[t.ID] = entryID
 		a.log.Info("注册定时任务", "task", t.ID, "cron", t.Cron)
+	}
+
+	// 重建变动监控。
+	a.watchMu.Lock()
+	for _, cancel := range a.watchCancels {
+		cancel()
+	}
+	a.watchCancels = map[string]context.CancelFunc{}
+	for _, t := range cfg.Tasks {
+		if t.WatchInterval <= 0 {
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		a.watchCancels[t.ID] = cancel
+		go a.watchTask(ctx, t, a.runner)
+		a.log.Info("注册变动监控", "task", t.ID, "interval", t.WatchInterval, "mode", t.WatchMode)
+	}
+	a.watchMu.Unlock()
+}
+
+// watchTask 按间隔扫描远端目录指纹，变化时触发任务。首次扫描后立即执行一次。
+func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *strm.Runner) {
+	log := a.log.With("task", task.ID, "watch", task.WatchMode)
+	interval := time.Duration(task.WatchInterval) * time.Second
+
+	// 按监控方式选择探测函数：递归指纹（本地存储）或目录计数（网盘存储）。
+	probe := runner.Fingerprint
+	if task.WatchMode == config.WatchDirCount {
+		probe = runner.DirCount
+	}
+
+	var last uint64
+	first := true
+	check := func() {
+		fp, err := probe(ctx, task)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("变更探测失败", "err", err)
+			}
+			return
+		}
+		if first || fp != last {
+			first = false
+			last = fp
+			log.Info("检测到文件变化，触发任务")
+			if _, err := a.RunTask(ctx, task.ID); err != nil && ctx.Err() == nil {
+				log.Warn("监控触发任务失败", "err", err)
+			}
+		}
+	}
+
+	check() // 启动时先跑一次
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
 	}
 }
 
@@ -195,7 +260,12 @@ func TestAlist(ctx context.Context, baseURL, token string) error {
 	return err
 }
 
-// Close 停止调度器。
+// Close 停止调度器与全部监控。
 func (a *App) Close() {
 	a.sched.Stop()
+	a.watchMu.Lock()
+	for _, cancel := range a.watchCancels {
+		cancel()
+	}
+	a.watchMu.Unlock()
 }
