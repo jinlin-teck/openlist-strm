@@ -1,0 +1,15 @@
+services:
+  openlist-strm:
+    build: .
+    # 或者使用已构建镜像：image: openlist-strm:latest
+    container_name: openlist-strm
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai   # cron 定时按此时区执行
+    volumes:
+      # 配置文件（首次把 config.example.yaml 复制为 config.yaml 并修改）
+      - ./config:/app/config
+      # strm 输出目录：宿主机路径需与 config.yaml 中 tasks[].target_dir 一致
+      - /opt/appdata/emby/strm:/opt/appdata/emby/strm

@@ -1,0 +1,6 @@
+# git 上下文精简，加快构建
+.git
+dist
+openlist-strm
+*.log
+config.yaml

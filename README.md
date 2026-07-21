@@ -49,6 +49,28 @@ cp config.example.yaml config.yaml   # 编辑填入 OpenList 地址与令牌
 GOOS=linux GOARCH=arm64 go build -o openlist-strm-linux-arm64 .
 ```
 
+### 方式三：Docker 运行
+
+```bash
+# 构建镜像
+docker build -t openlist-strm:latest .
+
+# 准备配置
+mkdir -p ./config && cp config.example.yaml ./config/config.yaml  # 编辑修改
+
+# 启动（strm 输出目录按实际情况挂载，路径需与 config.yaml 中 target_dir 一致）
+docker run -d --name openlist-strm \
+  -p 8080:8080 \
+  -e TZ=Asia/Shanghai \
+  -v ./config:/app/config \
+  -v /opt/appdata/emby/strm:/opt/appdata/emby/strm \
+  openlist-strm:latest
+```
+
+或直接 `docker compose up -d`（见仓库根目录 `docker-compose.yml`）。
+
+注意：容器内只能看到挂载进去的目录，`tasks[].target_dir` 必须是已挂载的路径；`TZ` 决定 cron 定时执行的时区。
+
 ### 后台运行
 
 ```bash
