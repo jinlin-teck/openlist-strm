@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenList STRM</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --card: #ffffff; --text: #1f2937; --muted: #6b7280;
+    --border: #e5e7eb; --accent: #2563eb; --accent-hover: #1d4ed8;
+    --green: #16a34a; --red: #dc2626; --amber: #d97706;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.5; }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 24px; }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header .sub { color: var(--muted); font-size: 13px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input, .field select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+                                font-size: 14px; font-family: inherit; background: #fff; width: 100%; }
+  .field input:focus, .field select:focus { outline: 2px solid rgba(37,99,235,.25); border-color: var(--accent); }
+  .field input[type=checkbox] { width: auto; }
+  .field .hint { font-size: 11px; color: var(--muted); }
+  .check-row { display: flex; align-items: center; gap: 8px; font-size: 14px; padding-top: 20px; }
+
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer;
+         background: var(--accent); color: #fff; transition: background .15s; }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn.ghost:hover { background: rgba(37,99,235,.06); }
+  .btn.danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+  .btn.danger:hover { background: rgba(220,38,38,.06); }
+  .btn.sm { padding: 5px 12px; font-size: 13px; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+
+  .task { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+          margin-bottom: 12px; background: var(--card); }
+  .task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .task-head .name { font-weight: 600; font-size: 15px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: #eef2ff; color: var(--accent); }
+  .badge.gray { background: #f3f4f6; color: var(--muted); }
+  .badge.green { background: #dcfce7; color: var(--green); }
+  .badge.red { background: #fee2e2; color: var(--red); }
+  .badge.amber { background: #fef3c7; color: var(--amber); }
+  .task-body { margin-top: 10px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .task-body code { background: #f3f4f6; padding: 1px 6px; border-radius: 4px; font-size: 12px;
+                    word-break: break-all; }
+  .task-foot { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .status-line { font-size: 12px; margin-right: auto; }
+  .status-line.err { color: var(--red); }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(37,99,235,.3);
+             border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+             vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none;
+                align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 50; overflow-y: auto; }
+  .modal-mask.show { display: flex; }
+  .modal { background: #fff; border-radius: 12px; padding: 24px; width: 100%; max-width: 640px; }
+  .modal h3 { font-size: 16px; margin-bottom: 16px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+           background: #111827; color: #fff; padding: 10px 20px; border-radius: 8px;
+           font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
+  .toast.show { opacity: .95; }
+  .toast.err { background: var(--red); }
+  .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 24px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>OpenList STRM</h1>
+    <span class="sub">从 OpenList/Alist 生成 .strm 文件</span>
+  </header>
+
+  <div class="card">
+    <h2>OpenList 连接</h2>
+    <div class="form-grid">
+      <div class="field full">
+        <label>服务器地址</label>
+        <input id="alist-url" placeholder="https://alist.example.com">
+      </div>
+      <div class="field full">
+        <label>API 令牌（Token）</label>
+        <input id="alist-token" type="password" placeholder="openlist-xxx" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>请求间隔（毫秒）</label>
+        <input id="alist-wait" type="number" min="0" placeholder="0">
+        <span class="hint">0 表示不限速</span>
+      </div>
+      <div class="field">
+        <label>Web 监听地址</label>
+        <input id="server-listen" placeholder=":8080">
+        <span class="hint">修改后需重启服务生效</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-test">测试连接</button>
+      <button class="btn" id="btn-save-server">保存</button>
+      <span id="test-result" style="font-size:13px"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">
+      任务列表
+      <button class="btn sm" id="btn-new-task">+ 新建任务</button>
+    </h2>
+    <div id="task-list"><div class="empty">加载中…</div></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="modal-mask">
+  <div class="modal">
+    <h3 id="modal-title">新建任务</h3>
+    <div class="form-grid">
+      <div class="field">
+        <label>任务 ID *</label>
+        <input id="t-id" placeholder="movie">
+        <span class="hint">唯一标识，保存后不可改</span>
+      </div>
+      <div class="field">
+        <label>任务名称</label>
+        <input id="t-name" placeholder="电影">
+      </div>
+      <div class="field full">
+        <label>Cron 表达式（6 段：秒 分 时 日 月 星期）</label>
+        <input id="t-cron" placeholder="0 0 3 * * * （留空表示仅手动触发）">
+      </div>
+      <div class="field full">
+        <label>OpenList 源目录 *</label>
+        <input id="t-source" placeholder="/nas/movies">
+      </div>
+      <div class="field full">
+        <label>本地输出目录 *</label>
+        <input id="t-target" placeholder="/media/movies">
+      </div>
+      <div class="field">
+        <label>STRM 内容模式</label>
+        <select id="t-mode">
+          <option value="alist_url">alist_url — Alist 下载直链</option>
+          <option value="path_replace">path_replace — 前缀替换为自定义路径</option>
+          <option value="raw_url">raw_url — 上游存储直链</option>
+          <option value="alist_path">alist_path — Alist 内部路径</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>并发数</label>
+        <input id="t-concurrency" type="number" min="1" placeholder="50">
+      </div>
+      <div class="field full" id="prefix-field" style="display:none">
+        <label>前缀替换（path_replace 模式必填「替换自」）</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="t-prefix" placeholder="替换自：https://alist.example.com/d/nas" style="flex:1">
+          <span style="color:var(--muted)">→</span>
+          <input id="t-prefix-to" placeholder="替换为：/mnt/nas（留空即去除前缀）" style="flex:1">
+        </div>
+        <span class="hint">例如把下载链接前缀替换为挂载路径，strm 内容即为 Emby 可读的 Linux 路径</span>
+        <label class="check-row" style="padding-top:8px"><input type="checkbox" id="t-url-encode" checked> URL 编码路径（生成网盘挂载路径时保持勾选；生成本地明文路径时取消勾选）</label>
+      </div>
+      <div class="field full">
+        <label>视频后缀（逗号分隔，留空用默认）</label>
+        <input id="t-exts" placeholder=".mp4, .mkv, .ts">
+      </div>
+      <label class="check-row"><input type="checkbox" id="t-overwrite"> 覆盖已存在的 strm / 伴生文件</label>
+      <label class="check-row"><input type="checkbox" id="t-sync"> 同步删除远端已不存在的 strm</label>
+
+      <div class="field full" style="border-top:1px solid var(--border);padding-top:12px">
+        <label class="check-row" style="padding-top:0"><input type="checkbox" id="t-dl-enable"> 下载伴生文件</label>
+      </div>
+      <div class="field full" id="dl-field" style="display:none">
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          <label class="check-row" style="padding-top:0"><input type="checkbox" id="t-dl-subtitle"> 字幕</label>
+          <label class="check-row" style="padding-top:0"><input type="checkbox" id="t-dl-image"> 图片</label>
+          <label class="check-row" style="padding-top:0"><input type="checkbox" id="t-dl-nfo"> NFO</label>
+        </div>
+        <div class="form-grid" style="margin-top:10px">
+          <div class="field">
+            <label>其他后缀（逗号分隔）</label>
+            <input id="t-dl-other" placeholder=".zip, .md">
+          </div>
+          <div class="field">
+            <label>下载并发数</label>
+            <input id="t-dl-concurrency" type="number" min="1" placeholder="5">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btn-save-task">保存任务</button>
+      <button class="btn ghost" id="btn-cancel-task">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let config = null, tasks = [], editingId = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function toast(msg, isErr = false) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 2600);
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+const MODE_LABEL = {
+  alist_url: 'Alist 直链', path_replace: '前缀替换',
+  raw_url: '上游直链', alist_path: 'Alist 路径',
+};
+
+function renderTasks() {
+  const box = $('task-list');
+  if (!tasks.length) { box.innerHTML = '<div class="empty">暂无任务，点击右上角「新建任务」</div>'; return; }
+  box.innerHTML = tasks.map(t => {
+    let status = '';
+    if (t.running) {
+      status = '<span class="status-line"><span class="spinner"></span>运行中…</span>';
+    } else if (t.last_error) {
+      status = `<span class="status-line err">上次失败：${esc(t.last_error)}</span>`;
+    } else if (t.last_end) {
+      const s = t.stats || {};
+      status = `<span class="status-line">上次运行 ${fmtTime(t.last_end)} ｜ 扫描 ${s.scanned ?? 0}，新增 ${s.created ?? 0}，跳过 ${s.skipped ?? 0}，删除 ${s.deleted ?? 0}，下载 ${s.downloaded ?? 0}${s.failed ? `，<span style="color:var(--red)">失败 ${s.failed}</span>` : ''}</span>`;
+    } else {
+      status = '<span class="status-line">尚未运行</span>';
+    }
+    return `<div class="task">
+      <div class="task-head">
+        <span class="name">${esc(t.name || t.id)}</span>
+        <span class="badge gray">${esc(t.id)}</span>
+        <span class="badge">${MODE_LABEL[t.mode] || t.mode}</span>
+        ${t.cron ? `<span class="badge amber" title="cron">⏱ ${esc(t.cron)}</span>` : '<span class="badge gray">仅手动</span>'}
+        ${t.overwrite ? '<span class="badge gray">覆盖</span>' : ''}
+        ${t.sync_delete ? '<span class="badge gray">同步删除</span>' : ''}
+        ${t.download?.enable ? '<span class="badge gray">下载伴生</span>' : ''}
+      </div>
+      <div class="task-body">
+        <div>源目录：<code>${esc(t.source_dir)}</code></div>
+        <div>输出到：<code>${esc(t.target_dir)}</code></div>
+        ${t.mode === 'path_replace' ? `<div>前缀替换：<code>${esc(t.url_prefix)} → ${esc(t.prefix_to || '（去除）')}</code>${t.url_encode === false ? '（不编码）' : ''}</div>` : ''}
+        ${t.next_run ? `<div>下次运行：${fmtTime(t.next_run)}</div>` : ''}
+      </div>
+      <div class="task-foot">
+        ${status}
+        <button class="btn sm" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>立即运行</button>
+        <button class="btn sm ghost" data-edit="${esc(t.id)}">编辑</button>
+        <button class="btn sm danger" data-del="${esc(t.id)}">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fillServerForm() {
+  $('alist-url').value = config.alist?.base_url || '';
+  $('alist-token').value = config.alist?.token || '';
+  $('alist-wait').value = config.alist?.wait_time ?? 0;
+  $('server-listen').value = config.server?.listen || ':8080';
+}
+
+async function saveConfig(patch) {
+  const next = JSON.parse(JSON.stringify(config));
+  Object.assign(next, patch);
+  await api('/api/config', { method: 'PUT', body: JSON.stringify(next) });
+  config = next;
+}
+
+async function refresh() {
+  tasks = await api('/api/tasks');
+  renderTasks();
+}
+
+// --- 事件绑定 ---
+
+$('btn-test').onclick = async () => {
+  const el = $('test-result');
+  el.textContent = '测试中…'; el.style.color = 'var(--muted)';
+  try {
+    await api('/api/alist/test', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: $('alist-url').value.trim(), token: $('alist-token').value.trim() }),
+    });
+    el.textContent = '✓ 连接成功'; el.style.color = 'var(--green)';
+  } catch (e) {
+    el.textContent = '✗ ' + e.message; el.style.color = 'var(--red)';
+  }
+};
+
+$('btn-save-server').onclick = async () => {
+  try {
+    await saveConfig({
+      server: { listen: $('server-listen').value.trim() || ':8080' },
+      alist: {
+        base_url: $('alist-url').value.trim(),
+        token: $('alist-token').value.trim(),
+        wait_time: parseInt($('alist-wait').value) || 0,
+      },
+    });
+    toast('配置已保存并热加载');
+  } catch (e) { toast(e.message, true); }
+};
+
+$('btn-new-task').onclick = () => openTaskModal(null);
+$('btn-cancel-task').onclick = () => $('modal-mask').classList.remove('show');
+$('modal-mask').onclick = e => { if (e.target === $('modal-mask')) $('modal-mask').classList.remove('show'); };
+$('t-mode').onchange = () => {
+  $('prefix-field').style.display = $('t-mode').value === 'path_replace' ? '' : 'none';
+};
+$('t-dl-enable').onchange = () => {
+  $('dl-field').style.display = $('t-dl-enable').checked ? '' : 'none';
+};
+
+function openTaskModal(task) {
+  editingId = task ? task.id : null;
+  $('modal-title').textContent = task ? '编辑任务' : '新建任务';
+  $('t-id').value = task?.id || '';
+  $('t-id').disabled = !!task;
+  $('t-name').value = task?.name || '';
+  $('t-cron').value = task?.cron || '';
+  $('t-source').value = task?.source_dir || '';
+  $('t-target').value = task?.target_dir || '';
+  $('t-mode').value = task?.mode === 'local_path' ? 'path_replace' : (task?.mode || 'alist_url');
+  $('t-mode').onchange();
+  $('t-prefix').value = task?.url_prefix || '';
+  $('t-prefix-to').value = task?.prefix_to || '';
+  $('t-url-encode').checked = task?.url_encode !== false;
+  $('t-concurrency').value = task?.concurrency || 50;
+  $('t-exts').value = (task?.video_exts || []).join(', ');
+  $('t-overwrite').checked = !!task?.overwrite;
+  $('t-sync').checked = !!task?.sync_delete;
+  const dl = task?.download || {};
+  $('t-dl-enable').checked = !!dl.enable;
+  $('t-dl-enable').onchange();
+  $('t-dl-subtitle').checked = !!dl.subtitle;
+  $('t-dl-image').checked = !!dl.image;
+  $('t-dl-nfo').checked = !!dl.nfo;
+  $('t-dl-other').value = (dl.other_ext || []).join(', ');
+  $('t-dl-concurrency').value = dl.concurrency || 5;
+  $('modal-mask').classList.add('show');
+}
+
+$('btn-save-task').onclick = async () => {
+  const task = {
+    id: $('t-id').value.trim(),
+    name: $('t-name').value.trim(),
+    cron: $('t-cron').value.trim(),
+    source_dir: $('t-source').value.trim(),
+    target_dir: $('t-target').value.trim(),
+    mode: $('t-mode').value,
+    url_prefix: $('t-prefix').value.trim(),
+    prefix_to: $('t-prefix-to').value.trim(),
+    url_encode: $('t-url-encode').checked,
+    overwrite: $('t-overwrite').checked,
+    sync_delete: $('t-sync').checked,
+    concurrency: parseInt($('t-concurrency').value) || 50,
+    video_exts: $('t-exts').value.split(',').map(s => s.trim()).filter(Boolean),
+    download: {
+      enable: $('t-dl-enable').checked,
+      subtitle: $('t-dl-subtitle').checked,
+      image: $('t-dl-image').checked,
+      nfo: $('t-dl-nfo').checked,
+      other_ext: $('t-dl-other').value.split(',').map(s => s.trim()).filter(Boolean),
+      concurrency: parseInt($('t-dl-concurrency').value) || 5,
+    },
+  };
+  if (!task.id || !task.source_dir || !task.target_dir) {
+    toast('任务 ID、源目录、输出目录为必填项', true); return;
+  }
+  const list = config.tasks.filter(t => t.id !== editingId);
+  if (editingId === null && config.tasks.some(t => t.id === task.id)) {
+    toast('任务 ID 已存在', true); return;
+  }
+  list.push(task);
+  try {
+    await saveConfig({ tasks: list });
+    $('modal-mask').classList.remove('show');
+    toast('任务已保存');
+    refresh();
+  } catch (e) { toast(e.message, true); }
+};
+
+$('task-list').onclick = async e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const { run, edit, del } = btn.dataset;
+  if (run) {
+    btn.disabled = true;
+    try {
+      await api(`/api/tasks/${encodeURIComponent(run)}/run`, { method: 'POST' });
+      toast('任务已触发');
+      setTimeout(refresh, 500);
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  } else if (edit) {
+    openTaskModal(tasks.find(t => t.id === edit));
+  } else if (del) {
+    if (!confirm(`确定删除任务「${del}」？（不会删除已生成的 strm 文件）`)) return;
+    try {
+      await saveConfig({ tasks: config.tasks.filter(t => t.id !== del) });
+      toast('已删除');
+      refresh();
+    } catch (err) { toast(err.message, true); }
+  }
+};
+
+// --- 初始化与轮询 ---
+
+(async () => {
+  try {
+    config = await api('/api/config');
+    fillServerForm();
+    await refresh();
+  } catch (e) {
+    toast('加载失败: ' + e.message, true);
+  }
+  setInterval(() => {
+    if (tasks.some(t => t.running)) refresh().catch(() => {});
+  }, 2000);
+  setInterval(() => refresh().catch(() => {}), 15000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+server:
+  listen: ":8080"          # WebUI/API 监听地址
+
+alist:
+  base_url: "https://alist.example.com"   # OpenList/Alist 服务器地址
+  token: "openlist-xxx"                   # API 令牌（仅支持令牌认证）
+  wait_time: 0                            # API 请求最小间隔（毫秒），0 表示不限速
+
+tasks:
+  - id: "movie"                           # 任务唯一 ID
+    name: "电影"                          # 显示名称
+    cron: "0 0 3 * * *"                   # 6 段 cron（秒 分 时 日 月 星期），留空则仅手动触发
+    source_dir: "/nas/movies"             # OpenList 上的源目录
+    target_dir: "/media/movies"           # 本地 strm 输出目录
+    mode: "path_replace"                  # strm 内容模式：alist_url / path_replace / raw_url / alist_path
+    url_prefix: "https://alist.example.com/d/nas"  # path_replace：被替换的 URL 前缀
+    prefix_to: ""                         # path_replace：替换为（留空即仅去除前缀；可填挂载路径如 /mnt/rclone/nas）
+    url_encode: true                      # path_replace：路径是否 URL 编码（生成本地明文路径时设为 false）
+    overwrite: false                      # 是否覆盖已存在的 strm / 伴生文件
+    concurrency: 50                       # 并发处理数
+    video_exts: []                        # 视频后缀，留空使用默认列表
+    sync_delete: false                    # 是否删除远端已不存在的本地 strm
+    download:                             # 伴生文件下载
+      enable: false
+      subtitle: false                     # 字幕：.ass .srt .ssa .sub
+      image: false                        # 图片：.png .jpg .jpeg
+      nfo: false                          # NFO：.nfo
+      other_ext: []                       # 其他自定义后缀
+      concurrency: 5                      # 下载并发数
