@@ -98,6 +98,11 @@
         <label>API 令牌（Token）</label>
         <input id="alist-token" type="password" placeholder="openlist-xxx" autocomplete="off">
       </div>
+      <div class="field full">
+        <label>User-Agent</label>
+        <input id="alist-ua" placeholder="留空使用默认浏览器 UA">
+        <span class="hint">115 等网盘会按 UA 校验下载签名，Go 默认 UA 会被拒绝，请保持浏览器 UA</span>
+      </div>
       <div class="field">
         <label>请求间隔（毫秒）</label>
         <input id="alist-wait" type="number" min="0" placeholder="0">
@@ -306,6 +311,7 @@ function esc(s) {
 function fillServerForm() {
   $('alist-url').value = config.alist?.base_url || '';
   $('alist-token').value = config.alist?.token || '';
+  $('alist-ua').value = config.alist?.user_agent || '';
   $('alist-wait').value = config.alist?.wait_time ?? 0;
   $('server-listen').value = config.server?.listen || ':8080';
 }
@@ -330,7 +336,7 @@ $('btn-test').onclick = async () => {
   try {
     await api('/api/alist/test', {
       method: 'POST',
-      body: JSON.stringify({ base_url: $('alist-url').value.trim(), token: $('alist-token').value.trim() }),
+      body: JSON.stringify({ base_url: $('alist-url').value.trim(), token: $('alist-token').value.trim(), user_agent: $('alist-ua').value.trim() }),
     });
     el.textContent = '✓ 连接成功'; el.style.color = 'var(--green)';
   } catch (e) {
@@ -345,6 +351,7 @@ $('btn-save-server').onclick = async () => {
       alist: {
         base_url: $('alist-url').value.trim(),
         token: $('alist-token').value.trim(),
+        user_agent: $('alist-ua').value.trim(),
         wait_time: parseInt($('alist-wait').value) || 0,
       },
     });

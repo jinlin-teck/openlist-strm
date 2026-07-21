@@ -21,10 +21,15 @@ type ServerConfig struct {
 
 // AlistConfig 描述 OpenList/Alist 服务器连接，仅支持令牌认证。
 type AlistConfig struct {
-	BaseURL  string `yaml:"base_url" json:"base_url"`   // 服务器地址，如 https://alist.example.com
-	Token    string `yaml:"token" json:"token"`         // 永久令牌
-	WaitTime int    `yaml:"wait_time" json:"wait_time"` // API 请求最小间隔，毫秒；0 表示不限速
+	BaseURL   string `yaml:"base_url" json:"base_url"`     // 服务器地址，如 https://alist.example.com
+	Token     string `yaml:"token" json:"token"`           // 永久令牌
+	WaitTime  int    `yaml:"wait_time" json:"wait_time"`   // API 请求最小间隔，毫秒；0 表示不限速
+	UserAgent string `yaml:"user_agent" json:"user_agent"` // HTTP User-Agent；115 等网盘会按 UA 校验下载签名，留空用默认
 }
+
+// DefaultUserAgent 默认 UA。Go 默认 UA (Go-http-client) 会被 115 网盘的
+// 下载签名校验拒绝（403 invalid signature），因此默认使用浏览器 UA。
+const DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 // STRM 内容模式。
 const (
@@ -184,6 +189,9 @@ func (c *Config) Validate() error {
 func (c *Config) Normalize() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = ":8080"
+	}
+	if c.Alist.UserAgent == "" {
+		c.Alist.UserAgent = DefaultUserAgent
 	}
 	for i := range c.Tasks {
 		t := &c.Tasks[i]

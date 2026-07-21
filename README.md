@@ -104,6 +104,7 @@ WantedBy=multi-user.target
 | `server.listen`                             | WebUI/API 监听地址，默认 `:8080`                                             |
 | `alist.base_url` / `alist.token`            | OpenList 地址与令牌                                                          |
 | `alist.wait_time`                           | API 请求最小间隔（毫秒），0 不限速                                           |
+| `alist.user_agent`                          | HTTP User-Agent，默认浏览器 UA；115 等网盘按 UA 校验下载签名，勿填 Go/curl UA |
 | `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                         |
 | `tasks[].mode`                              | `path_replace` / `alist_url` / `raw_url` / `alist_path`                      |
 | `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |

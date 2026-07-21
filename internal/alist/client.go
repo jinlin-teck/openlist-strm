@@ -15,9 +15,10 @@ import (
 
 // Client 调用 OpenList/Alist 的 HTTP API。
 type Client struct {
-	baseURL string
-	token   string
-	hc      *http.Client
+	baseURL   string
+	token     string
+	userAgent string
+	hc        *http.Client
 
 	mu      sync.Mutex
 	wait    time.Duration
@@ -25,20 +26,24 @@ type Client struct {
 }
 
 // New 创建客户端。baseURL 未写协议时默认补 https://。
-func New(baseURL, token string, waitMs int) *Client {
+func New(baseURL, token string, waitMs int, userAgent string) *Client {
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "https://" + baseURL
 	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
-		hc:      &http.Client{Timeout: 60 * time.Second},
-		wait:    time.Duration(waitMs) * time.Millisecond,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		token:     token,
+		userAgent: userAgent,
+		hc:        &http.Client{Timeout: 60 * time.Second},
+		wait:      time.Duration(waitMs) * time.Millisecond,
 	}
 }
 
 // BaseURL 返回规范化后的服务器地址。
 func (c *Client) BaseURL() string { return c.baseURL }
+
+// UserAgent 返回客户端使用的 User-Agent。
+func (c *Client) UserAgent() string { return c.userAgent }
 
 // envelope 是 OpenList API 的统一响应信封。
 type envelope struct {
@@ -65,6 +70,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	req.Header.Set("Authorization", c.token)
 	req.Header.Set("Content-Type", "application/json")
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 
 	resp, err := c.hc.Do(req)
 	if err != nil {

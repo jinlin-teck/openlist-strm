@@ -67,7 +67,7 @@ func (a *App) applyConfig(cfg *config.Config) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.cfg = cfg
-	a.runner = strm.New(alist.New(cfg.Alist.BaseURL, cfg.Alist.Token, cfg.Alist.WaitTime))
+	a.runner = strm.New(alist.New(cfg.Alist.BaseURL, cfg.Alist.Token, cfg.Alist.WaitTime, cfg.Alist.UserAgent))
 
 	for _, id := range a.entries {
 		a.sched.Remove(id)
@@ -254,8 +254,8 @@ func (a *App) taskStatus(id string) *TaskStatus {
 }
 
 // TestAlist 用给定连接参数探测服务器（验证令牌与连通性）。
-func TestAlist(ctx context.Context, baseURL, token string) error {
-	c := alist.New(baseURL, token, 0)
+func TestAlist(ctx context.Context, baseURL, token, userAgent string) error {
+	c := alist.New(baseURL, token, 0, userAgent)
 	_, err := c.Me(ctx)
 	return err
 }

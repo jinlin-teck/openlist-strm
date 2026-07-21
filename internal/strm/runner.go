@@ -293,6 +293,11 @@ func (r *Runner) downloadOne(ctx context.Context, task config.TaskConfig, basePa
 	if err != nil {
 		return false, err
 	}
+	// 网盘（如 115）的下载签名与 UA 绑定，取链与跳转后的下载必须带一致的 UA，
+	// 且 Go 默认 UA 会被 115 拒绝，必须使用配置的用户代理。
+	if ua := r.client.UserAgent(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
 	resp, err := r.hc.Do(req)
 	if err != nil {
 		return false, err

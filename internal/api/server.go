@@ -111,8 +111,9 @@ func (s *Server) runTask(w http.ResponseWriter, r *http.Request) {
 }
 
 type testReq struct {
-	BaseURL string `json:"base_url"`
-	Token   string `json:"token"`
+	BaseURL   string `json:"base_url"`
+	Token     string `json:"token"`
+	UserAgent string `json:"user_agent"`
 }
 
 func (s *Server) testAlist(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +124,7 @@ func (s *Server) testAlist(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	if err := app.TestAlist(ctx, req.BaseURL, req.Token); err != nil {
+	if err := app.TestAlist(ctx, req.BaseURL, req.Token, req.UserAgent); err != nil {
 		writeError(w, http.StatusOK, "连接失败: "+err.Error())
 		return
 	}

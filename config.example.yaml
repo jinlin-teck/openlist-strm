@@ -5,6 +5,7 @@ alist:
   base_url: "https://alist.example.com"   # OpenList/Alist 服务器地址
   token: "openlist-xxx"                   # API 令牌（仅支持令牌认证）
   wait_time: 0                            # API 请求最小间隔（毫秒），0 表示不限速
+  user_agent: ""                          # HTTP User-Agent，留空用默认浏览器 UA；115 等网盘按 UA 校验下载签名
 
 tasks:
   - id: "movie"                           # 任务唯一 ID
