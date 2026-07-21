@@ -3,6 +3,7 @@ config.yaml
 
 # 构建产物
 openlist-strm
+dist/
 
 # 运行日志
 *.log
