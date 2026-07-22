@@ -7,3 +7,9 @@ dist/
 
 # 运行日志
 *.log
+
+# 本地部署脚本（含 Portainer API Key，勿提交）
+install-local.sh
+
+# AI 代理约定文件（本地专用，勿提交）
+AGENTS.md
