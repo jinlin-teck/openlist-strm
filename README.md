@@ -1,7 +1,9 @@
 # openlist-strm
 
 从 OpenList/Alist 目录生成 `.strm` 文件的轻量服务，带 WebUI。
-基于 [AutoFilm](https://github.com/AkimioJR/AutoFilm) 重构，仅保留 Alist→STRM 功能。
+基于 [AutoFilm](https://github.com/AkimioJR/AutoFilm) 重构，仅保留 Alist→STRM 功能，感谢 [AutoFilm](https://github.com/AkimioJR/AutoFilm) 作者 [AkimioJR](https://github.com/AkimioJR) 的分享。
+
+> **提示**：如果需要在 Emby/Jellyfin 上完美播放 strm 类型的媒体文件，可参考本人另外一个项目：[StrmTool](https://github.com/jinlin-teck/StrmTool)（Emby/Jellyfin 插件，修改自 faush01/StrmExtract 并适配新版 Emby/Jellyfin）。
 
 ## 特性
 
@@ -94,7 +96,9 @@ WantedBy=multi-user.target
 
 启动后打开 `http://<主机IP>:8080` 进入 WebUI，之后所有配置均可在 WebUI 中修改（热加载，无需重启）。
 
-命令行参数：`--config` 指定配置文件路径（默认 `config.yaml`）；`--debug` 输出调试日志。
+> **注意**：WebUI 暂未做鉴权，任何能访问该端口的人都可查看和修改配置（含 OpenList 令牌）。请仅在内网使用，或使用 Nginx 等加认证的反向代理对外暴露。
+
+命令行参数：`--config` 指定配置文件路径（默认 `config.yaml`）；`--debug` 输出调试日志；`--version` 输出版本号并退出。
 
 ## 配置说明
 
