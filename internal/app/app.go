@@ -4,11 +4,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"gopkg.in/yaml.v3"
 
 	"openlist-strm/internal/alist"
 	"openlist-strm/internal/config"
@@ -38,6 +41,8 @@ type App struct {
 
 	watchMu      sync.Mutex
 	watchCancels map[string]context.CancelFunc
+	watchKeys    map[string]uint64 // 各任务监控配置的指纹，用于热加载时判断是否需要重启监控
+	state        *watchState       // 持久化的上次监控指纹，避免重启后误触发全量扫描
 
 	statusMu sync.Mutex
 	status   map[string]*TaskStatus
@@ -55,6 +60,8 @@ func New(cfgPath string, log *slog.Logger) (*App, error) {
 		sched:        cron.New(cron.WithSeconds()),
 		entries:      map[string]cron.EntryID{},
 		watchCancels: map[string]context.CancelFunc{},
+		watchKeys:    map[string]uint64{},
+		state:        loadWatchState(filepath.Join(filepath.Dir(cfgPath), "watch-state.json"), log),
 		status:       map[string]*TaskStatus{},
 	}
 	a.applyConfig(cfg)
@@ -74,7 +81,7 @@ func (a *App) applyConfig(cfg *config.Config) {
 	}
 	a.entries = map[string]cron.EntryID{}
 	for _, t := range cfg.Tasks {
-		if t.Cron == "" {
+		if t.Cron == "" || !t.IsEnabled() {
 			continue
 		}
 		taskID := t.ID
@@ -91,26 +98,54 @@ func (a *App) applyConfig(cfg *config.Config) {
 		a.log.Info("注册定时任务", "task", t.ID, "cron", t.Cron)
 	}
 
-	// 重建变动监控。
+	// 重建变动监控：配置未变化的任务保留原有 goroutine，避免热加载（如新增任务）导致全部任务重跑。
 	a.watchMu.Lock()
-	for _, cancel := range a.watchCancels {
-		cancel()
-	}
-	a.watchCancels = map[string]context.CancelFunc{}
+	newCancels := map[string]context.CancelFunc{}
+	newKeys := map[string]uint64{}
 	for _, t := range cfg.Tasks {
-		if t.WatchInterval <= 0 {
+		if t.WatchInterval <= 0 || !t.IsEnabled() {
+			continue
+		}
+		key := watchKey(cfg.Alist, t)
+		if cancel, ok := a.watchCancels[t.ID]; ok && a.watchKeys[t.ID] == key {
+			newCancels[t.ID] = cancel // 配置未变，保留监控
+			newKeys[t.ID] = key
+			delete(a.watchCancels, t.ID)
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		a.watchCancels[t.ID] = cancel
-		go a.watchTask(ctx, t, a.runner)
+		newCancels[t.ID] = cancel
+		newKeys[t.ID] = key
+		go a.watchTask(ctx, t, a.runner, key)
 		a.log.Info("注册变动监控", "task", t.ID, "interval", t.WatchInterval, "mode", t.WatchMode)
 	}
+	for _, cancel := range a.watchCancels { // 剩余的为已删除或配置变更的任务
+		cancel()
+	}
+	a.watchCancels = newCancels
+	a.watchKeys = newKeys
+	keep := make(map[string]bool, len(newKeys))
+	for id := range newKeys {
+		keep[id] = true
+	}
+	a.state.Prune(keep)
 	a.watchMu.Unlock()
 }
 
-// watchTask 按间隔扫描远端目录指纹，变化时触发任务。首次扫描后立即执行一次。
-func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *strm.Runner) {
+// watchKey 计算任务监控配置的指纹（含 Alist 连接配置），用于热加载时判断监控 goroutine 是否需要重启。
+func watchKey(alistCfg config.AlistConfig, t config.TaskConfig) uint64 {
+	data, _ := yaml.Marshal(struct {
+		Alist config.AlistConfig `yaml:"alist"`
+		Task  config.TaskConfig  `yaml:"task"`
+	}{alistCfg, t})
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return h.Sum64()
+}
+
+// watchTask 按间隔扫描远端目录指纹，变化时触发任务。无持久化状态的监控（新建/配置变更）启动后立即执行一次；
+// 重启后若能恢复上次指纹且远端无变化，则不触发。
+func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *strm.Runner, key uint64) {
 	log := a.log.With("task", task.ID, "watch", task.WatchMode)
 	interval := time.Duration(task.WatchInterval) * time.Second
 
@@ -122,6 +157,10 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 
 	var last uint64
 	first := true
+	if fp, ok := a.state.Get(task.ID, key); ok {
+		last, first = fp, false
+		log.Debug("恢复上次监控指纹", "fingerprint", fp)
+	}
 	check := func() {
 		fp, err := probe(ctx, task)
 		if err != nil {
@@ -133,6 +172,7 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 		if first || fp != last {
 			first = false
 			last = fp
+			a.state.Set(task.ID, key, fp)
 			log.Info("检测到文件变化，触发任务")
 			if _, err := a.RunTask(ctx, task.ID); err != nil && ctx.Err() == nil {
 				log.Warn("监控触发任务失败", "err", err)
@@ -193,6 +233,9 @@ func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
 	t := cfg.Task(taskID)
 	if t == nil {
 		return nil, fmt.Errorf("任务 %q 不存在", taskID)
+	}
+	if !t.IsEnabled() {
+		return nil, fmt.Errorf("任务 %q 已禁用", taskID)
 	}
 	task := *t
 

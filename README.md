@@ -16,8 +16,9 @@
   - 定时：6 段 cron（秒 分 时 日 月 星期）
   - 手动：WebUI 按钮或 API 触发指定任务
   - 变动监控：按 `watch_interval` 轮询，检测到变化才自动生成（见下文「变动监控」）
-- **WebUI**：修改全部配置（热加载，无需重启）、查看运行状态与统计、手动运行任务
+- **WebUI**：修改全部配置（热加载，无需重启）、查看运行状态与统计、手动运行任务、启用/禁用任务（禁用后任何方式都不会运行）
 - 并发扫描、断点跳过（`overwrite: false` 时跳过已存在文件）、可选同步删除（带 0 扫描保护）
+- 变动监控指纹持久化（`watch-state.json`），服务/容器重启或热加载后不会重复全量扫描
 
 ## 快速开始
 
@@ -111,6 +112,7 @@ WantedBy=multi-user.target
 | `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径                  |
 | `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`               |
 | `tasks[].cron`                              | 6 段 cron，留空则仅手动触发                                                  |
+| `tasks[].enabled`                           | 是否启用任务，默认 `true`；禁用后定时/监控/手动触发均不会运行                |
 | `tasks[].watch_interval`                    | 变动监控间隔（秒），0 关闭，最小 10；检测到变化才触发生成                    |
 | `tasks[].watch_mode`                        | `fingerprint`（默认）/ `dir_count`，见下文「变动监控」                       |
 | `tasks[].overwrite`                         | 覆盖已存在的 strm / 伴生文件，默认 `false`（存在且大小一致则跳过）           |
@@ -135,7 +137,8 @@ OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https
 
 - 指纹扫描使用 `refresh=true` 绕过服务端缓存；网盘存储会强制回源列表，请把 `watch_interval` 调大（如 1800s）
 - 监控触发与定时/手动触发共用任务锁，同一任务不会并发执行
-- 启动 watcher 后会立即全量执行一次任务
+- 启动 watcher 后会立即全量执行一次任务；热加载配置时只重启配置有变化的 watcher，未变更的任务不会重跑
+- 各任务的上次监控指纹持久化在配置文件旁的 `watch-state.json`，服务/容器重启后若远端无变化不会重复扫描；任务配置变化后旧状态自动作废
 
 ## STRM 内容模式
 

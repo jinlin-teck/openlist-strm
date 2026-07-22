@@ -17,10 +17,19 @@ import (
 	"openlist-strm/internal/app"
 )
 
+// Version 是应用版本号，发布时随 git tag 同步更新。
+const Version = "1.1.0"
+
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
 	debug := flag.Bool("debug", false, "输出调试日志")
+	showVersion := flag.Bool("version", false, "输出版本号并退出")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("openlist-strm", Version)
+		return
+	}
 
 	level := slog.LevelInfo
 	if *debug {

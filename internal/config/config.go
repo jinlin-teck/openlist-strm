@@ -56,6 +56,7 @@ const (
 type TaskConfig struct {
 	ID            string         `yaml:"id" json:"id"`
 	Name          string         `yaml:"name" json:"name"`
+	Enabled       *bool          `yaml:"enabled" json:"enabled"`               // 是否启用，默认 true；禁用时定时/监控/手动均不运行
 	Cron          string         `yaml:"cron" json:"cron"`                     // 6 段 cron（带秒），留空表示仅手动触发
 	WatchInterval int            `yaml:"watch_interval" json:"watch_interval"` // 变动监控间隔（秒），0 关闭；检测到远端变化后自动生成
 	WatchMode     string         `yaml:"watch_mode" json:"watch_mode"`         // 监控方式：fingerprint（递归指纹）/ dir_count（目录计数）
@@ -94,6 +95,11 @@ var (
 	ImageExts    = []string{".png", ".jpg", ".jpeg"}
 	NfoExts      = []string{".nfo"}
 )
+
+// IsEnabled 返回任务是否启用（默认启用）。
+func (t *TaskConfig) IsEnabled() bool {
+	return t.Enabled == nil || *t.Enabled
+}
 
 // EncodeEnabled 返回 path_replace 模式拼路径时是否做 URL 编码（默认开启，与原项目行为一致）。
 func (t *TaskConfig) EncodeEnabled() bool {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -101,6 +102,16 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) runTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	cfg := s.app.Config()
+	t := cfg.Task(id)
+	if t == nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("任务 %q 不存在", id))
+		return
+	}
+	if !t.IsEnabled() {
+		writeError(w, http.StatusConflict, fmt.Sprintf("任务 %q 已禁用，无法运行", id))
+		return
+	}
 	// 异步执行，立即返回；状态通过 GET /api/tasks 轮询。
 	go func() {
 		if _, err := s.app.RunTask(context.Background(), id); err != nil {

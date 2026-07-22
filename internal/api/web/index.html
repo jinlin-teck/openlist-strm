@@ -195,6 +195,7 @@
         <label>视频后缀（逗号分隔，留空用默认）</label>
         <input id="t-exts" placeholder=".mp4, .mkv, .ts">
       </div>
+      <label class="check-row"><input type="checkbox" id="t-enabled" checked> 启用任务（禁用后定时/监控/手动均不会运行）</label>
       <label class="check-row"><input type="checkbox" id="t-overwrite"> 覆盖已存在的 strm / 伴生文件</label>
       <label class="check-row"><input type="checkbox" id="t-sync"> 同步删除远端已不存在的 strm</label>
 
@@ -279,6 +280,7 @@ function renderTasks() {
       <div class="task-head">
         <span class="name">${esc(t.name || t.id)}</span>
         <span class="badge gray">${esc(t.id)}</span>
+        ${t.enabled === false ? '<span class="badge red">已禁用</span>' : ''}
         <span class="badge">${MODE_LABEL[t.mode] || t.mode}</span>
         ${t.cron ? `<span class="badge amber" title="cron">⏱ ${esc(t.cron)}</span>` : ''}
         ${t.watch_interval ? `<span class="badge green" title="变动监控">👁 ${t.watch_interval}s${t.watch_mode === 'dir_count' ? ' 计数' : ''}</span>` : ''}
@@ -295,7 +297,7 @@ function renderTasks() {
       </div>
       <div class="task-foot">
         ${status}
-        <button class="btn sm" data-run="${esc(t.id)}" ${t.running ? 'disabled' : ''}>立即运行</button>
+        <button class="btn sm" data-run="${esc(t.id)}" ${t.running || t.enabled === false ? 'disabled' : ''}>立即运行</button>
         <button class="btn sm ghost" data-edit="${esc(t.id)}">编辑</button>
         <button class="btn sm danger" data-del="${esc(t.id)}">删除</button>
       </div>
@@ -389,6 +391,7 @@ function openTaskModal(task) {
   $('t-exts').value = (task?.video_exts || []).join(', ');
   $('t-overwrite').checked = !!task?.overwrite;
   $('t-sync').checked = !!task?.sync_delete;
+  $('t-enabled').checked = task?.enabled !== false;
   const dl = task?.download || {};
   $('t-dl-enable').checked = !!dl.enable;
   $('t-dl-enable').onchange();
@@ -404,6 +407,7 @@ $('btn-save-task').onclick = async () => {
   const task = {
     id: $('t-id').value.trim(),
     name: $('t-name').value.trim(),
+    enabled: $('t-enabled').checked,
     cron: $('t-cron').value.trim(),
     watch_interval: parseInt($('t-watch').value) || 0,
     watch_mode: $('t-watch-mode').value,
