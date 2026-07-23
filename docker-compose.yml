@@ -1,7 +1,8 @@
 services:
   openlist-strm:
-    build: .
-    # 或者使用已构建镜像：image: openlist-strm:latest
+    image: ghcr.io/jinlin-teck/openlist-strm:latest
+    # 如需本地构建，注释掉上面 image 行并取消下面 build 行注释
+    # build: .
     container_name: openlist-strm
     restart: unless-stopped
     ports:

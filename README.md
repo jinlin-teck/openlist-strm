@@ -58,14 +58,34 @@ GOOS=linux GOARCH=arm64 go build -o openlist-strm-linux-arm64 .
 
 ### 方式三：Docker 运行
 
-```bash
-# 构建镜像
-docker build -t openlist-strm:latest .
+#### 使用预构建镜像（推荐）
 
+每次发布 Release 后，GitHub Actions 会自动构建并推送多架构镜像到 GitHub Container Registry：
+
+```bash
 # 准备配置
 mkdir -p ./config && cp config.example.yaml ./config/config.yaml  # 编辑修改
 
-# 启动（strm 输出目录按实际情况挂载，路径需与 config.yaml 中 target_dir 一致）
+# 直接拉取运行（strm 输出目录按实际情况挂载，路径需与 config.yaml 中 target_dir 一致）
+docker run -d --name openlist-strm \
+  -p 8080:8080 \
+  -e TZ=Asia/Shanghai \
+  -v ./config:/app/config \
+  -v /opt/appdata/emby/strm:/opt/appdata/emby/strm \
+  ghcr.io/jinlin-teck/openlist-strm:latest
+```
+
+镜像同时提供版本标签，例如 `ghcr.io/jinlin-teck/openlist-strm:1.2.0`，可按需固定版本号。
+
+或直接 `docker compose up -d`（见仓库根目录 `docker-compose.yml`，默认使用预构建镜像）。
+
+#### 自行构建镜像
+
+```bash
+docker build -t openlist-strm:latest .
+
+mkdir -p ./config && cp config.example.yaml ./config/config.yaml  # 编辑修改
+
 docker run -d --name openlist-strm \
   -p 8080:8080 \
   -e TZ=Asia/Shanghai \
@@ -73,8 +93,6 @@ docker run -d --name openlist-strm \
   -v /opt/appdata/emby/strm:/opt/appdata/emby/strm \
   openlist-strm:latest
 ```
-
-或直接 `docker compose up -d`（见仓库根目录 `docker-compose.yml`）。
 
 注意：容器内只能看到挂载进去的目录，`tasks[].target_dir` 必须是已挂载的路径；`TZ` 决定 cron 定时执行的时区。
 
