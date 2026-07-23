@@ -134,6 +134,7 @@ WantedBy=multi-user.target
 | `alist.user_agent`                          | HTTP User-Agent，默认浏览器 UA；115 等网盘按 UA 校验下载签名，勿填 Go/curl UA |
 | `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                         |
 | `tasks[].mode`                              | `path_replace` / `alist_url` / `raw_url` / `alist_path`                      |
+| `tasks[].public_url`                        | `alist_url` 模式下把直链域名替换为该公网地址（内网取链、公网播放），留空不替换 |
 | `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |
 | `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径                  |
 | `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`               |
@@ -171,7 +172,7 @@ OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https
 | 模式           | strm 内容                   | 适用场景                                                |
 | -------------- | --------------------------- | ------------------------------------------------------- |
 | `path_replace` | 前缀替换后的路径            | Emby 直接读本地/挂载路径（推荐）                        |
-| `alist_url`    | OpenList 下载直链（带签名） | 经 OpenList 播放                                        |
+| `alist_url`    | OpenList 下载直链（带签名） | 经 OpenList 播放；配 `public_url` 可内网取链、公网播放  |
 | `raw_url`      | 上游存储真实直链            | 绕过 OpenList 播放（每次运行多一次 `/api/fs/get` 调用） |
 | `alist_path`   | OpenList 内部路径           | 配合 MediaWarp 等 302 重定向方案                        |
 

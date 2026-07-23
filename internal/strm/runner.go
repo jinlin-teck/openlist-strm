@@ -206,7 +206,12 @@ func (r *Runner) strmContent(ctx context.Context, task config.TaskConfig, basePa
 	case config.ModeRawURL:
 		return r.client.RawURL(ctx, remotePath)
 	case config.ModeAlistURL:
-		return r.downloadURL(task, basePath, item, remotePath, true, true), nil
+		u := r.downloadURL(task, basePath, item, remotePath, true, true)
+		// 配置了 public_url 时，把直链域名替换为公网地址（签名与路径绑定，换域名仍有效）。
+		if task.PublicURL != "" {
+			u = strings.Replace(u, r.client.BaseURL(), task.PublicURL, 1)
+		}
+		return u, nil
 	case config.ModePathReplace:
 		raw := r.downloadURL(task, basePath, item, remotePath, false, task.EncodeEnabled())
 		if !strings.HasPrefix(raw, task.URLPrefix) {

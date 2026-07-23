@@ -195,6 +195,11 @@
         <label>并发数</label>
         <input id="t-concurrency" type="number" min="1" placeholder="50">
       </div>
+      <div class="field full" id="public-url-field" style="display:none">
+        <label>公网地址（public_url，可留空）</label>
+        <input id="t-public-url" placeholder="https://alist-public.example.com">
+        <span class="hint">alist_url 模式专用：用内网地址取链后把域名替换为该公网地址，签名（?sign=）仍然有效；留空则直链使用上方 OpenList 地址</span>
+      </div>
       <div class="field full" id="prefix-field" style="display:none">
         <label>前缀替换（path_replace 模式必填「替换自」）</label>
         <div style="display:flex;gap:8px;align-items:center">
@@ -326,6 +331,7 @@ function renderTasks() {
         <div>源目录：<code>${esc(t.source_dir)}</code></div>
         <div>输出到：<code>${esc(t.target_dir)}</code></div>
         ${t.mode === 'path_replace' ? `<div>前缀替换：<code>${esc(t.url_prefix)} → ${esc(t.prefix_to || '（去除）')}</code>${t.url_encode === false ? '（不编码）' : ''}</div>` : ''}
+        ${t.mode === 'alist_url' && t.public_url ? `<div>公网地址：<code>${esc(t.public_url)}</code></div>` : ''}
         ${t.next_run ? `<div>下次运行：${fmtTime(t.next_run)}</div>` : ''}
       </div>
       <div class="task-foot">
@@ -413,6 +419,7 @@ $('btn-cancel-task').onclick = () => $('modal-mask').classList.remove('show');
 $('modal-mask').onclick = e => { if (e.target === $('modal-mask')) $('modal-mask').classList.remove('show'); };
 $('t-mode').onchange = () => {
   $('prefix-field').style.display = $('t-mode').value === 'path_replace' ? '' : 'none';
+  $('public-url-field').style.display = $('t-mode').value === 'alist_url' ? '' : 'none';
 };
 $('t-dl-enable').onchange = () => {
   $('dl-field').style.display = $('t-dl-enable').checked ? '' : 'none';
@@ -431,6 +438,7 @@ function openTaskModal(task) {
   $('t-target').value = task?.target_dir || '';
   $('t-mode').value = task?.mode === 'local_path' ? 'path_replace' : (task?.mode || 'alist_url');
   $('t-mode').onchange();
+  $('t-public-url').value = task?.public_url || '';
   $('t-prefix').value = task?.url_prefix || '';
   $('t-prefix-to').value = task?.prefix_to || '';
   $('t-url-encode').checked = task?.url_encode !== false;
@@ -461,6 +469,7 @@ $('btn-save-task').onclick = async () => {
     source_dir: $('t-source').value.trim(),
     target_dir: $('t-target').value.trim(),
     mode: $('t-mode').value,
+    public_url: $('t-public-url').value.trim(),
     url_prefix: $('t-prefix').value.trim(),
     prefix_to: $('t-prefix-to').value.trim(),
     url_encode: $('t-url-encode').checked,

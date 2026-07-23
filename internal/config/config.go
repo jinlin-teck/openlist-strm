@@ -63,6 +63,7 @@ type TaskConfig struct {
 	SourceDir     string         `yaml:"source_dir" json:"source_dir"`
 	TargetDir     string         `yaml:"target_dir" json:"target_dir"`
 	Mode          string         `yaml:"mode" json:"mode"`
+	PublicURL     string         `yaml:"public_url" json:"public_url"` // alist_url 模式：把直链域名替换为公网地址（内网 API 取链、公网播放）
 	URLPrefix     string         `yaml:"url_prefix" json:"url_prefix"` // path_replace 模式：被替换的 URL 前缀
 	PrefixTo      string         `yaml:"prefix_to" json:"prefix_to"`   // path_replace 模式：替换为（留空即仅去除前缀）
 	URLEncode     *bool          `yaml:"url_encode" json:"url_encode"` // path_replace 模式：路径是否 URL 编码，默认 true
@@ -184,6 +185,14 @@ func (c *Config) Validate() error {
 		if mode == ModePathReplace && strings.TrimSpace(t.URLPrefix) == "" {
 			return fmt.Errorf("task %q: path_replace 模式必须配置 url_prefix", t.ID)
 		}
+		if t.PublicURL != "" {
+			if mode != ModeAlistURL {
+				return fmt.Errorf("task %q: public_url 仅 alist_url 模式可用", t.ID)
+			}
+			if !strings.HasPrefix(t.PublicURL, "http://") && !strings.HasPrefix(t.PublicURL, "https://") {
+				return fmt.Errorf("task %q: public_url 必须以 http:// 或 https:// 开头", t.ID)
+			}
+		}
 		if t.WatchMode != "" && t.WatchMode != WatchFingerprint && t.WatchMode != WatchDirCount {
 			return fmt.Errorf("task %q: 非法 watch_mode %q", t.ID, t.WatchMode)
 		}
@@ -210,6 +219,7 @@ func (c *Config) Normalize() {
 		if t.Mode == "local_path" { // 兼容旧配置
 			t.Mode = ModePathReplace
 		}
+		t.PublicURL = strings.TrimRight(strings.TrimSpace(t.PublicURL), "/")
 		if t.Concurrency <= 0 {
 			t.Concurrency = 50
 		}

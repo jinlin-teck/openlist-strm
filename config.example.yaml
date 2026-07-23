@@ -18,6 +18,7 @@ tasks:
     source_dir: "/nas/movies"             # OpenList 上的源目录
     target_dir: "/media/movies"           # 本地 strm 输出目录
     mode: "path_replace"                  # strm 内容模式：alist_url / path_replace / raw_url / alist_path
+    public_url: ""                        # alist_url：把直链域名替换为该公网地址（内网 API 取链、公网播放；签名仍有效），留空不替换
     url_prefix: "https://alist.example.com/d/nas"  # path_replace：被替换的 URL 前缀
     prefix_to: ""                         # path_replace：替换为（留空即仅去除前缀；可填挂载路径如 /mnt/rclone/nas）
     url_encode: true                      # path_replace：路径是否 URL 编码（生成本地明文路径时设为 false）
