@@ -36,7 +36,7 @@ const (
 	ModeAlistURL    = "alist_url"    // Alist 下载直链 {base_url}/d/...?sign=...
 	ModeRawURL      = "raw_url"      // 上游存储真实直链（调用 /api/fs/get）
 	ModeAlistPath   = "alist_path"   // Alist 内部路径
-	ModePathReplace = "path_replace" // 替换 URL 前缀（可选 URL 解码），得到 Linux 路径
+	ModePathReplace = "path_replace" // 替换 URL 前缀（可选 URL 解码），得到 Linux 路径；放在最后，供特殊需求使用
 )
 
 var validModes = map[string]bool{
