@@ -30,12 +30,18 @@ func New(a *app.App) *Server {
 	return s
 }
 
+var version string
+
+// SetVersion 设置 WebUI /api/version 返回的版本号，由 main 包注入。
+func SetVersion(v string) { version = v }
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/config", s.getConfig)
 	s.mux.HandleFunc("PUT /api/config", s.putConfig)
 	s.mux.HandleFunc("GET /api/tasks", s.listTasks)
 	s.mux.HandleFunc("POST /api/tasks/{id}/run", s.runTask)
 	s.mux.HandleFunc("POST /api/alist/test", s.testAlist)
+	s.mux.HandleFunc("GET /api/version", s.getVersion)
 
 	static, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -143,6 +149,10 @@ func (s *Server) testAlist(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

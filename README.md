@@ -7,6 +7,10 @@
 
 ## 特性
 
+- **零依赖单二进制**：纯 Go 编写（仅 2 个第三方库，无 CGO），编译产物只有一个约 11MB 的静态二进制 + 一个 `config.yaml` 即可运行，支持 Windows/Linux/macOS 及 ARM 架构交叉编译
+- **极小的 Docker 镜像**：两阶段构建（golang → alpine），镜像仅约 27MB
+- **资源占用极低**：常驻内存约 20MB，空闲时 CPU 占用趋近于 0（实际运行中 `docker stats` 实测约 19.8MiB / 0.00%），适合长期跑在 NAS 等小设备上
+- **灵活适配多种存储方案**：通过 `path_replace` 模式替换 URL 前缀（`url_prefix` → `prefix_to`），同一个 OpenList 源既能生成 Emby 直读的本地明文路径，也能生成 rclone 等网盘挂载路径，配合多任务轻松适配本地存储、网盘或本地+网盘混合的媒体库
 - **四种 STRM 内容模式**
   - `path_replace`：替换下载链接的 URL 前缀（可留空即仅去除），可选 URL 编码——既能生成本地明文路径，也能生成 rclone 等网盘挂载路径
   - `alist_url`：Alist 下载直链（`{base_url}/d/...?sign=...`）
@@ -175,3 +179,4 @@ strm 内容: /mnt/rclone/nas/mnt/.../英雄本色2 (1987)/英雄本色2 (1987) -
 | GET  | `/api/tasks`          | 任务列表（含运行状态、统计、下次触发时间） |
 | POST | `/api/tasks/{id}/run` | 手动触发指定任务                           |
 | POST | `/api/alist/test`     | 测试连接 `{base_url, token}`               |
+| GET  | `/api/version`        | 获取当前版本号                             |

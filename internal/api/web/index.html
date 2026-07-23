@@ -66,6 +66,10 @@
              vertical-align: -2px; margin-right: 6px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .pager { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 16px;
+           font-size: 13px; color: var(--muted); }
+  .task-summary { font-size: 13px; color: var(--muted); text-align: right; margin-bottom: 8px; }
+
   .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none;
                 align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 50; overflow-y: auto; }
   .modal-mask.show { display: flex; }
@@ -78,6 +82,10 @@
   .toast.show { opacity: .95; }
   .toast.err { background: var(--red); }
   .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 24px 0; }
+
+  footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 32px; }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -126,8 +134,14 @@
       任务列表
       <button class="btn sm" id="btn-new-task">+ 新建任务</button>
     </h2>
+    <div id="task-summary" class="task-summary"></div>
     <div id="task-list"><div class="empty">加载中…</div></div>
+    <div id="task-pager" class="pager" style="display:none"></div>
   </div>
+
+  <footer>
+    <div>openlist-strm <span id="version">—</span> · <a href="https://github.com/jinlin-teck/openlist-strm" target="_blank" rel="noopener">GitHub</a></div>
+  </footer>
 </div>
 
 <div class="modal-mask" id="modal-mask">
@@ -232,6 +246,9 @@
 <script>
 const $ = id => document.getElementById(id);
 let config = null, tasks = [], editingId = null;
+let currentPage = 1;
+const PAGE_SIZE = 10;
+const REPO_URL = 'https://github.com/jinlin-teck/openlist-strm';
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -263,8 +280,24 @@ const MODE_LABEL = {
 
 function renderTasks() {
   const box = $('task-list');
-  if (!tasks.length) { box.innerHTML = '<div class="empty">暂无任务，点击右上角「新建任务」</div>'; return; }
-  box.innerHTML = tasks.map(t => {
+  const pager = $('task-pager');
+  const summary = $('task-summary');
+  const total = tasks.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageTasks = tasks.slice(start, start + PAGE_SIZE);
+
+  summary.textContent = total > 0 ? `共 ${total} 个任务` : '';
+
+  if (!total) {
+    box.innerHTML = '<div class="empty">暂无任务，点击右上角「新建任务」</div>';
+    pager.style.display = 'none';
+    return;
+  }
+
+  box.innerHTML = pageTasks.map(t => {
     let status = '';
     if (t.running) {
       status = '<span class="status-line"><span class="spinner"></span>运行中…</span>';
@@ -298,11 +331,25 @@ function renderTasks() {
       <div class="task-foot">
         ${status}
         <button class="btn sm" data-run="${esc(t.id)}" ${t.running || t.enabled === false ? 'disabled' : ''}>立即运行</button>
+        <button class="btn sm ghost" data-toggle="${esc(t.id)}">${t.enabled === false ? '启用' : '禁用'}</button>
         <button class="btn sm ghost" data-edit="${esc(t.id)}">编辑</button>
         <button class="btn sm danger" data-del="${esc(t.id)}">删除</button>
       </div>
     </div>`;
   }).join('');
+
+  if (totalPages > 1) {
+    pager.style.display = '';
+    pager.innerHTML = `
+      <button class="btn sm" id="pager-prev" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
+      <span>第 ${currentPage} / ${totalPages} 页</span>
+      <button class="btn sm" id="pager-next" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+    `;
+    $('pager-prev').onclick = () => { if (currentPage > 1) { currentPage--; renderTasks(); } };
+    $('pager-next').onclick = () => { if (currentPage < totalPages) { currentPage++; renderTasks(); } };
+  } else {
+    pager.style.display = 'none';
+  }
 }
 
 function esc(s) {
@@ -449,13 +496,21 @@ $('btn-save-task').onclick = async () => {
 $('task-list').onclick = async e => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  const { run, edit, del } = btn.dataset;
+  const { run, edit, del, toggle } = btn.dataset;
   if (run) {
     btn.disabled = true;
     try {
       await api(`/api/tasks/${encodeURIComponent(run)}/run`, { method: 'POST' });
       toast('任务已触发');
       setTimeout(refresh, 500);
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  } else if (toggle) {
+    btn.disabled = true;
+    const list = config.tasks.map(t => t.id === toggle ? { ...t, enabled: t.enabled === false } : t);
+    try {
+      await saveConfig({ tasks: list });
+      toast(list.find(t => t.id === toggle).enabled ? '任务已启用' : '任务已禁用');
+      refresh();
     } catch (err) { toast(err.message, true); btn.disabled = false; }
   } else if (edit) {
     openTaskModal(tasks.find(t => t.id === edit));
@@ -472,6 +527,12 @@ $('task-list').onclick = async e => {
 // --- 初始化与轮询 ---
 
 (async () => {
+  try {
+    const ver = await api('/api/version');
+    $('version').textContent = ver.version || 'dev';
+  } catch (e) {
+    $('version').textContent = 'dev';
+  }
   try {
     config = await api('/api/config');
     fillServerForm();
