@@ -213,7 +213,7 @@ func (r *Runner) strmContent(ctx context.Context, task config.TaskConfig, basePa
 		}
 		return u, nil
 	case config.ModePathReplace:
-		raw := r.downloadURL(task, basePath, item, remotePath, false, task.EncodeEnabled())
+		raw := r.downloadURL(task, basePath, item, remotePath, task.WithSign, task.EncodeEnabled())
 		if !strings.HasPrefix(raw, task.URLPrefix) {
 			return "", fmt.Errorf("URL %q 不包含前缀 %q", raw, task.URLPrefix)
 		}

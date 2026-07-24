@@ -67,6 +67,7 @@ type TaskConfig struct {
 	URLPrefix     string         `yaml:"url_prefix" json:"url_prefix"` // path_replace 模式：被替换的 URL 前缀
 	PrefixTo      string         `yaml:"prefix_to" json:"prefix_to"`   // path_replace 模式：替换为（留空即仅去除前缀）
 	URLEncode     *bool          `yaml:"url_encode" json:"url_encode"` // path_replace 模式：路径是否 URL 编码，默认 true
+	WithSign      bool           `yaml:"with_sign" json:"with_sign"`   // path_replace 模式：URL 末尾是否附加签名（?sign=），默认 false；prefix_to 仍是 http(s) URL 时才应开启
 	Overwrite     bool           `yaml:"overwrite" json:"overwrite"`
 	Concurrency   int            `yaml:"concurrency" json:"concurrency"`
 	VideoExts     []string       `yaml:"video_exts" json:"video_exts"`   // 留空使用默认视频后缀
@@ -184,6 +185,9 @@ func (c *Config) Validate() error {
 		}
 		if mode == ModePathReplace && strings.TrimSpace(t.URLPrefix) == "" {
 			return fmt.Errorf("task %q: path_replace 模式必须配置 url_prefix", t.ID)
+		}
+		if t.WithSign && mode != ModePathReplace {
+			return fmt.Errorf("task %q: with_sign 仅 path_replace 模式可用", t.ID)
 		}
 		if t.PublicURL != "" {
 			if mode != ModeAlistURL {

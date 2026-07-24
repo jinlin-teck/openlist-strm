@@ -185,10 +185,10 @@
       <div class="field">
         <label>STRM 内容模式</label>
         <select id="t-mode">
-          <option value="alist_url">alist_url — Alist 下载直链</option>
-          <option value="raw_url">raw_url — 上游存储直链</option>
-          <option value="alist_path">alist_path — Alist 内部路径</option>
-          <option value="path_replace">path_replace — 前缀替换为自定义路径</option>
+          <option value="alist_url">alist_url — OpenList 直链（完整 URL，流量走 OpenList）</option>
+          <option value="raw_url">raw_url — 上游 CDN 直链（流量不走 OpenList）</option>
+          <option value="alist_path">alist_path — OpenList 内部路径（挂载后播放）</option>
+          <option value="path_replace">path_replace — 替换 URL 前缀（最灵活）</option>
         </select>
       </div>
       <div class="field">
@@ -207,8 +207,9 @@
           <span style="color:var(--muted)">→</span>
           <input id="t-prefix-to" placeholder="替换为：/mnt/nas（留空即去除前缀）" style="flex:1">
         </div>
-        <span class="hint">例如把下载链接前缀替换为挂载路径，strm 内容即为 Emby 可读的 Linux 路径</span>
+        <span class="hint">可替换为挂载路径、另一个 OpenList 域名前缀，或留空仅去除前缀，实现本地挂载/多网盘路径转换</span>
         <label class="check-row" style="padding-top:8px"><input type="checkbox" id="t-url-encode" checked> URL 编码路径（生成网盘挂载路径时保持勾选；生成本地明文路径时取消勾选）</label>
+        <label class="check-row"><input type="checkbox" id="t-with-sign"> 附加签名（?sign=）——替换后仍是 http/https URL 时勾选；替换为本地/挂载路径时勿勾选（会导致路径不存在）</label>
       </div>
       <div class="field full">
         <label>视频后缀（逗号分隔，留空用默认）</label>
@@ -330,7 +331,7 @@ function renderTasks() {
       <div class="task-body">
         <div>源目录：<code>${esc(t.source_dir)}</code></div>
         <div>输出到：<code>${esc(t.target_dir)}</code></div>
-        ${t.mode === 'path_replace' ? `<div>前缀替换：<code>${esc(t.url_prefix)} → ${esc(t.prefix_to || '（去除）')}</code>${t.url_encode === false ? '（不编码）' : ''}</div>` : ''}
+        ${t.mode === 'path_replace' ? `<div>前缀替换：<code>${esc(t.url_prefix)} → ${esc(t.prefix_to || '（去除）')}</code>${t.url_encode === false ? '（不编码）' : ''}${t.with_sign ? '（带签名）' : ''}</div>` : ''}
         ${t.mode === 'alist_url' && t.public_url ? `<div>公网地址：<code>${esc(t.public_url)}</code></div>` : ''}
         ${t.next_run ? `<div>下次运行：${fmtTime(t.next_run)}</div>` : ''}
       </div>
@@ -442,6 +443,7 @@ function openTaskModal(task) {
   $('t-prefix').value = task?.url_prefix || '';
   $('t-prefix-to').value = task?.prefix_to || '';
   $('t-url-encode').checked = task?.url_encode !== false;
+  $('t-with-sign').checked = !!task?.with_sign;
   $('t-concurrency').value = task?.concurrency || 50;
   $('t-exts').value = (task?.video_exts || []).join(', ');
   $('t-overwrite').checked = !!task?.overwrite;
@@ -473,6 +475,7 @@ $('btn-save-task').onclick = async () => {
     url_prefix: $('t-prefix').value.trim(),
     prefix_to: $('t-prefix-to').value.trim(),
     url_encode: $('t-url-encode').checked,
+    with_sign: $('t-with-sign').checked,
     overwrite: $('t-overwrite').checked,
     sync_delete: $('t-sync').checked,
     concurrency: parseInt($('t-concurrency').value) || 50,

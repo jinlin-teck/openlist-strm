@@ -18,7 +18,7 @@ import (
 )
 
 // Version 是应用版本号，发布时随 git tag 同步更新。
-const Version = "1.2.1"
+const Version = "1.2.2"
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")

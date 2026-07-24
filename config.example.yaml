@@ -20,8 +20,9 @@ tasks:
     mode: "path_replace"                  # strm 内容模式：alist_url / raw_url / alist_path / path_replace
     public_url: ""                        # alist_url：把直链域名替换为该公网地址（内网 API 取链、公网播放；签名仍有效），留空不替换
     url_prefix: "https://alist.example.com/d/nas"  # path_replace：被替换的 URL 前缀
-    prefix_to: ""                         # path_replace：替换为（留空即仅去除前缀；可填挂载路径如 /mnt/rclone/nas）
+    prefix_to: ""                         # path_replace：替换为（留空即仅去除前缀；可填挂载路径如 /mnt/rclone/nas，或另一个 OpenList 域名前缀，实现多网盘路径转换）
     url_encode: true                      # path_replace：路径是否 URL 编码（生成本地明文路径时设为 false）
+    with_sign: false                      # path_replace：URL 末尾是否附加签名（?sign=），仅 prefix_to 仍是 http(s) URL 时开启；替换为本地/挂载路径时保持 false
     overwrite: false                      # 是否覆盖已存在的 strm / 伴生文件
     concurrency: 50                       # 并发处理数
     video_exts: []                        # 视频后缀，留空使用默认列表
