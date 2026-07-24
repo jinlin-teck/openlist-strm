@@ -12,10 +12,10 @@
 - **资源占用极低**：常驻内存约 20MB，空闲时 CPU 占用趋近于 0（实际运行中 `docker stats` 实测约 19.8MiB / 0.00%），适合长期跑在 NAS 等小设备上
 - **灵活适配多种存储方案**：通过 `path_replace` 模式替换 URL 前缀（`url_prefix` → `prefix_to`），同一个 OpenList 源既能生成 Emby 直读的本地明文路径，也能生成 rclone 等网盘挂载路径，配合多任务轻松适配本地存储、网盘或本地+网盘混合的媒体库
 - **四种 STRM 内容模式**
-  - `alist_url`：Alist 下载直链（`{base_url}/d/...?sign=...`）
-  - `raw_url`：上游存储真实直链
-  - `alist_path`：Alist 内部路径
-  - `path_replace`：替换下载链接的 URL 前缀（可留空即仅去除），可选 URL 编码——既能生成本地明文路径，也能生成 rclone 等网盘挂载路径
+  - `alist_url`：生成完整的 OpenList HTTP/HTTPS 直链，可直接播放，也适用于公网播放，播放流量完全通过 OpenList
+  - `raw_url`：生成上游网盘的真实 CDN 链接，流量不通过 OpenList；配合 302 跳转工具可让 Emby/Jellyfin 客户端直接从 CDN 播放，从而绕开服务端
+  - `alist_path`：生成 OpenList 内部路径，即去掉 `https://alist.example.com/d` 及签名后的本地路径，适用于 CloudDrive2、rclone 等挂载后播放
+  - `path_replace`：通过替换 URL 前缀生成路径；可以是不带签名的 OpenList HTTP/HTTPS 链接，也可以是 CloudDrive2、rclone 等挂载后的本地路径，还支持多网盘路径转换
 - **伴生文件下载**：可选下载字幕（.ass/.srt/.ssa/.sub）、图片（.png/.jpg/.jpeg）、NFO 及自定义后缀文件
 - **仅令牌认证**：只使用 OpenList API Token，不支持用户名密码
 - **三种触发方式**
@@ -133,10 +133,10 @@ WantedBy=multi-user.target
 | `alist.wait_time`                           | API 请求最小间隔（毫秒），0 不限速                                           |
 | `alist.user_agent`                          | HTTP User-Agent，默认浏览器 UA；115 等网盘按 UA 校验下载签名，勿填 Go/curl UA |
 | `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                         |
-| `tasks[].mode`                              | `alist_url` / `raw_url` / `alist_path` / `path_replace`                      |
+| `tasks[].mode`                              | `alist_url` / `raw_url` / `alist_path` / `path_replace`，详见「STRM 内容模式」 |
 | `tasks[].public_url`                        | `alist_url` 模式下把直链域名替换为该公网地址（内网取链、公网播放），留空不替换 |
 | `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |
-| `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径                  |
+| `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径，或另一个 OpenList 域名前缀 |
 | `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`               |
 | `tasks[].cron`                              | 6 段 cron，留空则仅手动触发                                                  |
 | `tasks[].enabled`                           | 是否启用任务，默认 `true`；禁用后定时/监控/手动触发均不会运行                |
@@ -169,12 +169,12 @@ OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https
 
 ## STRM 内容模式
 
-| 模式           | strm 内容                   | 适用场景                                                |
-| -------------- | --------------------------- | ------------------------------------------------------- |
-| `alist_url`    | OpenList 下载直链（带签名） | 经 OpenList 播放；配 `public_url` 可内网取链、公网播放  |
-| `raw_url`      | 上游存储真实直链            | 绕过 OpenList 播放（每次运行多一次 `/api/fs/get` 调用） |
-| `alist_path`   | OpenList 内部路径           | 配合 MediaWarp 等 302 重定向方案                        |
-| `path_replace` | 前缀替换后的路径            | Emby 直接读本地/挂载路径                                |
+| 模式           | strm 内容                                   | 用途与特点                                                                                      |
+| -------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `alist_url`    | 完整的 OpenList HTTP/HTTPS 直链（带签名）   | 可直接播放；配合 `public_url` 可内网取链、公网播放；播放流量完全通过 OpenList                   |
+| `raw_url`      | 上游网盘的真实 CDN 链接                     | 流量不通过 OpenList；配合 302 跳转工具可让客户端直接从 CDN 播放，绕开 Emby/Jellyfin 服务端（每次运行多一次 `/api/fs/get` 调用） |
+| `alist_path`   | OpenList 内部路径（去掉域名前缀与签名）     | 适用于 CloudDrive2、rclone 等挂载到本地后，按 OpenList 内部路径播放                             |
+| `path_replace` | 替换 URL 前缀后得到的路径或链接             | 可生成不带签名的 OpenList HTTP/HTTPS 链接，或生成 CloudDrive2、rclone 等挂载后的本地路径，也支持多网盘路径转换 |
 
 `path_replace` 模式示例：
 
