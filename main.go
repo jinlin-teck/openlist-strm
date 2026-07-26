@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 )
 
 // Version 是应用版本号，发布时随 git tag 同步更新。
-const Version = "1.2.2"
+const Version = "1.2.3"
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
@@ -57,18 +58,31 @@ func main() {
 		Addr:              a.Config().Server.Listen,
 		Handler:           api.New(a).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
+	errCh := make(chan error, 1)
 	go func() {
 		log.Info("WebUI 已启动", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("HTTP 服务异常退出", "err", err)
-			os.Exit(1)
+			errCh <- err
 		}
 	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-	log.Info("正在退出...")
+	select {
+	case s := <-sig:
+		log.Info("收到退出信号", "signal", s.String())
+	case err := <-errCh:
+		log.Error("HTTP 服务异常退出", "err", err)
+	}
+
+	// 优雅退出：停止接收新请求并等待在途请求结束（最多 5 秒），再由 defer 关闭调度与监控。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Warn("HTTP 服务优雅退出失败", "err", err)
+	}
 }

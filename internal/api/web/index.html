@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpenList STRM</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   :root {
     --bg: #f4f6f9; --card: #ffffff; --text: #1f2937; --muted: #6b7280;
@@ -217,7 +218,7 @@
       </div>
       <label class="check-row"><input type="checkbox" id="t-enabled" checked> 启用任务（禁用后定时/监控/手动均不会运行）</label>
       <label class="check-row"><input type="checkbox" id="t-overwrite"> 覆盖已存在的 strm / 伴生文件</label>
-      <label class="check-row"><input type="checkbox" id="t-sync"> 同步删除远端已不存在的 strm</label>
+      <label class="check-row"><input type="checkbox" id="t-sync"> 同步删除远端已不存在的本地 strm</label>
 
       <div class="field full" style="border-top:1px solid var(--border);padding-top:12px">
         <label class="check-row" style="padding-top:0"><input type="checkbox" id="t-dl-enable"> 下载伴生文件</label>
@@ -320,7 +321,7 @@ function renderTasks() {
         <span class="name">${esc(t.name || t.id)}</span>
         <span class="badge gray">${esc(t.id)}</span>
         ${t.enabled === false ? '<span class="badge red">已禁用</span>' : ''}
-        <span class="badge">${MODE_LABEL[t.mode] || t.mode}</span>
+        <span class="badge">${esc(MODE_LABEL[t.mode] || t.mode)}</span>
         ${t.cron ? `<span class="badge amber" title="cron">⏱ ${esc(t.cron)}</span>` : ''}
         ${t.watch_interval ? `<span class="badge green" title="变动监控">👁 ${t.watch_interval}s${t.watch_mode === 'dir_count' ? ' 计数' : ''}</span>` : ''}
         ${!t.cron && !t.watch_interval ? '<span class="badge gray">仅手动</span>' : ''}

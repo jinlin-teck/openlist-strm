@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +40,7 @@ const (
 	ModeAlistURL    = "alist_url"    // Alist 下载直链 {base_url}/d/...?sign=...
 	ModeRawURL      = "raw_url"      // 上游存储真实直链（调用 /api/fs/get）
 	ModeAlistPath   = "alist_path"   // Alist 内部路径
-	ModePathReplace = "path_replace" // 替换 URL 前缀（可选 URL 解码），得到 Linux 路径；放在最后，供特殊需求使用
+	ModePathReplace = "path_replace" // 替换 URL 前缀（可选 URL 编码），得到 Linux 路径；放在最后，供特殊需求使用
 )
 
 var validModes = map[string]bool{
@@ -45,6 +49,10 @@ var validModes = map[string]bool{
 	ModeAlistPath:   true,
 	ModePathReplace: true,
 }
+
+// cronParser 与 app 层调度器一致（6 段带秒），用于保存配置前预校验 cron 表达式，
+// 避免非法表达式保存成功但任务静默不被注册。
+var cronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 // 监控方式。
 const (
@@ -156,8 +164,21 @@ func normalizeExts(exts []string) []string {
 	return out
 }
 
+// pathOverlap 判断两个目录是否相同或互为祖先（用于 sync_delete 的 target_dir 冲突检测）。
+func pathOverlap(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(a, b+sep) || strings.HasPrefix(b, a+sep)
+}
+
 // Validate 校验配置，返回第一个错误。
 func (c *Config) Validate() error {
+	if _, err := net.ResolveTCPAddr("tcp", c.Server.Listen); err != nil {
+		return fmt.Errorf("server.listen 非法: %w", err)
+	}
 	if strings.TrimSpace(c.Alist.BaseURL) == "" {
 		return fmt.Errorf("alist.base_url 不能为空")
 	}
@@ -200,6 +221,27 @@ func (c *Config) Validate() error {
 		if t.WatchMode != "" && t.WatchMode != WatchFingerprint && t.WatchMode != WatchDirCount {
 			return fmt.Errorf("task %q: 非法 watch_mode %q", t.ID, t.WatchMode)
 		}
+		if t.Cron != "" {
+			if _, err := cronParser.Parse(t.Cron); err != nil {
+				return fmt.Errorf("task %q: cron 表达式非法: %w", t.ID, err)
+			}
+		}
+	}
+	// 开启 sync_delete 的任务会删除 target_dir 下不属于自己的 strm，
+	// 目标目录互相重叠时会误删其他任务的产物，必须禁止。
+	for i := range c.Tasks {
+		if !c.Tasks[i].SyncDelete {
+			continue
+		}
+		for j := i + 1; j < len(c.Tasks); j++ {
+			if !c.Tasks[j].SyncDelete {
+				continue
+			}
+			if pathOverlap(c.Tasks[i].TargetDir, c.Tasks[j].TargetDir) {
+				return fmt.Errorf("task %q 与 %q 均开启 sync_delete 且 target_dir 重叠（%s 与 %s），会互相误删",
+					c.Tasks[i].ID, c.Tasks[j].ID, c.Tasks[i].TargetDir, c.Tasks[j].TargetDir)
+			}
+		}
 	}
 	return nil
 }
@@ -211,6 +253,9 @@ func (c *Config) Normalize() {
 	}
 	if c.Alist.UserAgent == "" {
 		c.Alist.UserAgent = DefaultUserAgent
+	}
+	if c.Alist.WaitTime < 0 {
+		c.Alist.WaitTime = 0
 	}
 	for i := range c.Tasks {
 		t := &c.Tasks[i]
@@ -259,9 +304,13 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true) // 拒绝未知字段，配置项拼写错误时直接报错而非静默忽略
+	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
 	}
+	// 配置文件含 API 令牌，确保仅属主可读写。
+	_ = os.Chmod(path, 0o600)
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -279,5 +328,14 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// 原子写（临时文件 + 改名），避免写盘中途崩溃留下截断配置；配置文件含令牌，仅属主可读写。
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

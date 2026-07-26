@@ -41,11 +41,11 @@ func New(client *alist.Client) *Runner {
 	return &Runner{client: client, hc: &http.Client{Timeout: 10 * time.Minute}}
 }
 
-// 跳过扫描的系统文件/目录。
+// 跳过扫描的系统文件/目录（键全小写，比较时对文件名做 ToLower）。
 var skipNames = map[string]bool{
-	"@eaDir":    true,
-	"Thumbs.db": true,
-	".DS_Store": true,
+	"@eadir":    true,
+	"thumbs.db": true,
+	".ds_store": true,
 }
 
 // Run 执行一次任务，返回统计。ctx 取消时尽快退出。
@@ -78,6 +78,18 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 	var mu sync.Mutex
 	// 本次扫描生成的全部 strm 的本地绝对路径，用于同步删除。
 	generated := map[string]bool{}
+	// 与 strm 生成相关的失败数（列目录失败、生成失败；不含伴生下载失败）。
+	// 非零时跳过同步删除，防止部分失败被误判为「远端已删除」而误清空本地。
+	var scanFailed int
+
+	// path_replace 的 url_prefix 若与下载基址（{base_url}/d）没有任何前缀关系，
+	// 则每个文件都必然失败，扫描前直接报错，避免配置错误被放大成逐文件失败。
+	if task.Mode == config.ModePathReplace {
+		dlBase := r.client.BaseURL() + "/d"
+		if !strings.HasPrefix(task.URLPrefix, dlBase) && !strings.HasPrefix(dlBase, task.URLPrefix) {
+			return nil, fmt.Errorf("url_prefix %q 与下载基址 %q 不匹配，请检查配置", task.URLPrefix, dlBase)
+		}
+	}
 
 	// 显式栈 DFS 遍历目录，避免深递归。
 	stack := []string{task.SourceDir}
@@ -94,11 +106,12 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 			log.Warn("列目录失败，跳过", "dir", dir, "err", err)
 			mu.Lock()
 			stats.Failed++
+			scanFailed++
 			mu.Unlock()
 			continue
 		}
 		for _, it := range items {
-			if skipNames[it.Name] {
+			if skipNames[strings.ToLower(it.Name)] {
 				continue
 			}
 			full := joinPath(dir, it.Name)
@@ -111,7 +124,12 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 				// 非视频文件：按需作为伴生文件下载。
 				if downloadExts[ext] {
 					wg.Add(1)
-					dlSem <- struct{}{}
+					select {
+					case dlSem <- struct{}{}:
+					case <-ctx.Done():
+						wg.Done()
+						continue
+					}
 					go func(item alist.FsItem, remotePath string) {
 						defer wg.Done()
 						defer func() { <-dlSem }()
@@ -134,7 +152,12 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 			mu.Unlock()
 
 			wg.Add(1)
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				wg.Done()
+				continue
+			}
 			go func(item alist.FsItem, remotePath string) {
 				defer wg.Done()
 				defer func() { <-sem }()
@@ -144,6 +167,7 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 				switch {
 				case err != nil:
 					stats.Failed++
+					scanFailed++
 					log.Warn("生成 strm 失败", "path", remotePath, "err", err)
 				case ok:
 					stats.Created++
@@ -157,12 +181,18 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 	}
 	wg.Wait()
 
+	// 存在任何与生成相关的失败（列目录失败/文件处理失败）时跳过同步删除：
+	// 失败文件不在 generated 集合中，照旧删除会把「远端仍存在」的本地 strm 误清掉。
 	if task.SyncDelete {
-		deleted, err := syncDelete(task.TargetDir, generated, stats.Scanned, log)
-		if err != nil {
-			log.Warn("同步删除失败", "err", err)
+		if scanFailed > 0 {
+			log.Warn("本次运行存在失败项，已跳过同步删除以保护数据", "failed", scanFailed)
 		} else {
-			stats.Deleted = deleted
+			deleted, err := syncDelete(task.TargetDir, generated, stats.Scanned, log)
+			if err != nil {
+				log.Warn("同步删除失败", "err", err)
+			} else {
+				stats.Deleted = deleted
+			}
 		}
 	}
 	return stats, nil
@@ -170,8 +200,8 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, log *slog.Logg
 
 // processOne 处理单个视频文件。返回本地 strm 路径与是否新写入。
 func (r *Runner) processOne(ctx context.Context, task config.TaskConfig, basePath string, item alist.FsItem, remotePath string, log *slog.Logger) (string, bool, error) {
-	rel, err := filepath.Rel(task.SourceDir, filepath.FromSlash(remotePath))
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, err := filepath.Rel(filepath.FromSlash(task.SourceDir), filepath.FromSlash(remotePath))
+	if err != nil || isPathTraversal(rel) {
 		return "", false, fmt.Errorf("非法相对路径 %q", remotePath)
 	}
 	local := filepath.Join(task.TargetDir, rel)
@@ -191,10 +221,11 @@ func (r *Runner) processOne(ctx context.Context, task config.TaskConfig, basePat
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 		return local, false, err
 	}
-	if err := os.WriteFile(local, []byte(content), 0o644); err != nil {
+	// 原子写：先写临时文件再改名，避免进程中断留下截断的 strm 被 overwrite=false 永久跳过。
+	if err := writeFileAtomic(local, []byte(content), 0o644); err != nil {
 		return local, false, err
 	}
-	log.Debug("生成 strm", "local", local, "content", content)
+	log.Debug("生成 strm", "local", local, "content", stripQuery(content))
 	return local, true, nil
 }
 
@@ -215,7 +246,7 @@ func (r *Runner) strmContent(ctx context.Context, task config.TaskConfig, basePa
 	case config.ModePathReplace:
 		raw := r.downloadURL(task, basePath, item, remotePath, task.WithSign, task.EncodeEnabled())
 		if !strings.HasPrefix(raw, task.URLPrefix) {
-			return "", fmt.Errorf("URL %q 不包含前缀 %q", raw, task.URLPrefix)
+			return "", fmt.Errorf("URL %q 不包含前缀 %q", stripQuery(raw), task.URLPrefix)
 		}
 		return task.PrefixTo + strings.TrimPrefix(raw, task.URLPrefix), nil
 	}
@@ -247,7 +278,7 @@ func (r *Runner) Fingerprint(ctx context.Context, task config.TaskConfig) (uint6
 			return 0, fmt.Errorf("列目录 %s 失败: %w", dir, err)
 		}
 		for _, it := range items {
-			if skipNames[it.Name] {
+			if skipNames[strings.ToLower(it.Name)] {
 				continue
 			}
 			full := joinPath(dir, it.Name)
@@ -281,8 +312,8 @@ func (r *Runner) DirCount(ctx context.Context, task config.TaskConfig) (uint64, 
 
 // downloadOne 下载伴生文件到目标目录同名位置。返回是否真正写入。
 func (r *Runner) downloadOne(ctx context.Context, task config.TaskConfig, basePath string, item alist.FsItem, remotePath string, log *slog.Logger) (bool, error) {
-	rel, err := filepath.Rel(task.SourceDir, filepath.FromSlash(remotePath))
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, err := filepath.Rel(filepath.FromSlash(task.SourceDir), filepath.FromSlash(remotePath))
+	if err != nil || isPathTraversal(rel) {
 		return false, fmt.Errorf("非法相对路径 %q", remotePath)
 	}
 	local := filepath.Join(task.TargetDir, rel)
@@ -315,12 +346,25 @@ func (r *Runner) downloadOne(ctx context.Context, task config.TaskConfig, basePa
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 		return false, err
 	}
-	f, err := os.Create(local)
+	// 写临时文件成功后再改名，失败不留半截文件；限制最大 512MB 防异常响应写爆磁盘。
+	tmp := local + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	n, err := io.Copy(f, io.LimitReader(resp.Body, 512<<20))
+	if err == nil && item.Size > 0 && n != item.Size {
+		err = fmt.Errorf("下载大小不符: 期望 %d 字节，实际 %d 字节", item.Size, n)
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if err := os.Rename(tmp, local); err != nil {
+		_ = os.Remove(tmp)
 		return false, err
 	}
 	log.Debug("下载伴生文件", "local", local)
@@ -348,6 +392,33 @@ func encodePath(p string) string {
 		segs[i] = url.PathEscape(s)
 	}
 	return strings.Join(segs, "/")
+}
+
+// isPathTraversal 判断 filepath.Rel 算出的相对路径是否越出根目录。
+// 精确匹配 ".." 或 "../" 前缀，避免误伤 "..foo" 之类的合法文件名。
+func isPathTraversal(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// writeFileAtomic 先写临时文件再改名，避免进程中断留下截断文件。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// stripQuery 去掉 URL 查询串（含 ?sign= 临时签名），避免签名进入日志。
+func stripQuery(s string) string {
+	if i := strings.IndexByte(s, '?'); i >= 0 {
+		return s[:i] + "?..."
+	}
+	return s
 }
 
 func joinPath(dir, name string) string {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -52,64 +53,112 @@ type envelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-// do 发送一次 API 请求并解析统一信封，按需限速。
-func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
-	c.throttle()
+// maxAttempts 是 API 请求的最大尝试次数（含首次）。对网络错误与 429/5xx
+// 做有限次退避重试，避免瞬时抖动直接中断整个任务扫描。
+const maxAttempts = 3
 
-	var reader io.Reader
+// do 发送 API 请求并解析统一信封，按需限速，失败时按可重试性退避重试。
+func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	var bodyBytes []byte
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		reader = bytes.NewReader(buf)
+		bodyBytes = buf
+	}
+	for attempt := 1; ; attempt++ {
+		retryable, err := c.doOnce(ctx, method, path, bodyBytes, out)
+		if err == nil || !retryable || attempt == maxAttempts {
+			return err
+		}
+		slog.Debug("API 请求失败，稍后重试", "method", method, "path", path, "attempt", attempt, "err", err)
+		timer := time.NewTimer(time.Duration(attempt) * 500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// doOnce 执行单次请求；retryable 表示失败是否值得重试
+// （网络错误、HTTP 429/5xx、业务 code>=500；认证类 4xx 不重试）。
+func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, out any) (retryable bool, err error) {
+	if err := c.throttle(ctx); err != nil {
+		return false, err
+	}
+
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", c.token)
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return true, err // 网络错误（连接重置、DNS 抖动等）可重试
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return true, fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
+	}
+	// 多读 1 字节用于区分「恰好 32MB」与「超限被截断」。
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20+1))
 	if err != nil {
-		return err
+		return false, err
+	}
+	if len(raw) > 32<<20 {
+		return false, fmt.Errorf("%s %s: 响应超过 32MB 上限", method, path)
 	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("%s %s: 响应解析失败(HTTP %d): %s", method, path, resp.StatusCode, truncate(raw, 200))
+		return false, fmt.Errorf("%s %s: 响应解析失败(HTTP %d): %s", method, path, resp.StatusCode, truncate(raw, 200))
 	}
 	if env.Code != 200 {
-		return fmt.Errorf("%s %s: %s (code %d)", method, path, env.Message, env.Code)
+		return env.Code >= 500, fmt.Errorf("%s %s: %s (code %d)", method, path, env.Message, env.Code)
 	}
 	if out != nil && len(env.Data) > 0 {
 		if err := json.Unmarshal(env.Data, out); err != nil {
-			return fmt.Errorf("%s %s: data 解析失败: %w", method, path, err)
+			return false, fmt.Errorf("%s %s: data 解析失败: %w", method, path, err)
 		}
 	}
-	return nil
+	return false, nil
 }
 
-// throttle 保证两次请求之间有最小间隔。
-func (c *Client) throttle() {
+// throttle 保证两次请求之间有最小间隔，等待期间响应 ctx 取消。
+func (c *Client) throttle(ctx context.Context) error {
 	if c.wait <= 0 {
-		return
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if d := time.Since(c.lastReq); d < c.wait {
-		time.Sleep(c.wait - d)
+		timer := time.NewTimer(c.wait - d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	c.lastReq = time.Now()
+	return nil
 }
 
 func truncate(b []byte, n int) string {

@@ -13,6 +13,7 @@ import (
 
 	"openlist-strm/internal/app"
 	"openlist-strm/internal/config"
+	"openlist-strm/internal/strm"
 )
 
 //go:embed web
@@ -60,7 +61,9 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg config.Config
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+	dec.DisallowUnknownFields() // 拒绝未知字段，配置项拼写错误时直接报错而非静默忽略
+	if err := dec.Decode(&cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不是合法 JSON: "+err.Error())
 		return
 	}
@@ -74,12 +77,12 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 // TaskView 是任务配置 + 运行状态 + 下次触发时间的组合视图。
 type TaskView struct {
 	config.TaskConfig
-	Running   bool       `json:"running"`
-	LastStart *time.Time `json:"last_start,omitempty"`
-	LastEnd   *time.Time `json:"last_end,omitempty"`
-	LastError string     `json:"last_error,omitempty"`
-	Stats     any        `json:"stats,omitempty"`
-	NextRun   *time.Time `json:"next_run,omitempty"`
+	Running   bool        `json:"running"`
+	LastStart *time.Time  `json:"last_start,omitempty"`
+	LastEnd   *time.Time  `json:"last_end,omitempty"`
+	LastError string      `json:"last_error,omitempty"`
+	Stats     *strm.Stats `json:"stats,omitempty"`
+	NextRun   *time.Time  `json:"next_run,omitempty"`
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +121,10 @@ func (s *Server) runTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("任务 %q 已禁用，无法运行", id))
 		return
 	}
+	if st, ok := s.app.Statuses()[id]; ok && st.Running {
+		writeError(w, http.StatusConflict, fmt.Sprintf("任务 %q 正在运行中", id))
+		return
+	}
 	// 异步执行，立即返回；状态通过 GET /api/tasks 轮询。
 	go func() {
 		if _, err := s.app.RunTask(context.Background(), id); err != nil {
@@ -135,14 +142,14 @@ type testReq struct {
 
 func (s *Server) testAlist(w http.ResponseWriter, r *http.Request) {
 	var req testReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不是合法 JSON")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if err := app.TestAlist(ctx, req.BaseURL, req.Token, req.UserAgent); err != nil {
-		writeError(w, http.StatusOK, "连接失败: "+err.Error())
+		writeError(w, http.StatusBadGateway, "连接失败: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

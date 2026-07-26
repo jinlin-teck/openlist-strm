@@ -37,6 +37,9 @@ func loadWatchState(path string, log *slog.Logger) *watchState {
 		log.Warn("监控状态文件损坏，已重置", "path", path, "err", err)
 		s.data = map[string]watchEntry{}
 	}
+	if s.data == nil { // 文件内容为 null 时 Unmarshal 不报错但得到 nil map，后续 Set 会 panic
+		s.data = map[string]watchEntry{}
+	}
 	return s
 }
 

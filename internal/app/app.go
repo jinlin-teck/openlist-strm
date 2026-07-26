@@ -36,6 +36,8 @@ type App struct {
 	cfg    *config.Config
 	runner *strm.Runner
 
+	updateMu sync.Mutex // 串行化配置更新（落盘 + 热加载），防止并发 PUT 导致磁盘与内存配置不一致
+
 	sched   *cron.Cron
 	entries map[string]cron.EntryID
 
@@ -133,7 +135,11 @@ func (a *App) applyConfig(cfg *config.Config) {
 }
 
 // watchKey 计算任务监控配置的指纹（含 Alist 连接配置），用于热加载时判断监控 goroutine 是否需要重启。
+// 只纳入影响扫描/取链行为的字段：修改名称、cron、并发数等无关配置不会重启监控，也就不会触发重跑。
 func watchKey(alistCfg config.AlistConfig, t config.TaskConfig) uint64 {
+	t.Name = ""
+	t.Cron = ""
+	t.Concurrency = 0
 	data, _ := yaml.Marshal(struct {
 		Alist config.AlistConfig `yaml:"alist"`
 		Task  config.TaskConfig  `yaml:"task"`
@@ -170,13 +176,17 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 			return
 		}
 		if first || fp != last {
+			log.Info("检测到文件变化，触发任务")
+			if _, err := a.RunTask(ctx, task.ID); err != nil {
+				if ctx.Err() == nil {
+					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
+				}
+				return // 指纹不落盘，保留下轮重试机会
+			}
+			// 任务成功后才记录指纹：失败时保持旧指纹，下轮探测会再次触发。
 			first = false
 			last = fp
 			a.state.Set(task.ID, key, fp)
-			log.Info("检测到文件变化，触发任务")
-			if _, err := a.RunTask(ctx, task.ID); err != nil && ctx.Err() == nil {
-				log.Warn("监控触发任务失败", "err", err)
-			}
 		}
 	}
 
@@ -193,15 +203,17 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 	}
 }
 
-// Config 返回当前配置副本。
+// Config 返回当前配置副本。注意是浅拷贝（与 live 配置共享底层切片），调用方只读使用，不得修改。
 func (a *App) Config() config.Config {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return *a.cfg
 }
 
-// UpdateConfig 校验、落盘并热加载新配置。
+// UpdateConfig 校验、落盘并热加载新配置。整体串行化，防止并发更新交错导致磁盘与内存配置不一致。
 func (a *App) UpdateConfig(cfg *config.Config) error {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
 	if err := config.Save(a.cfgPath, cfg); err != nil {
 		return err
 	}
@@ -225,6 +237,9 @@ func (a *App) NextRuns() map[string]time.Time {
 
 // RunTask 同步执行一次任务；同一任务并发执行会被拒绝。
 func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
+	if err := ctx.Err(); err != nil { // 热加载取消的旧监控可能带着已取消的 ctx 进入，直接拒绝
+		return nil, err
+	}
 	a.mu.RLock()
 	cfg := a.cfg
 	runner := a.runner
