@@ -6,7 +6,21 @@ on:
       - 'v*.*.*'
 
 jobs:
+  # 先由单个 job 创建 Release，矩阵 job 仅追加上传资产。
+  # 否则多个矩阵 job 并发执行 action-gh-release 会各自创建 Release，
+  # 产生重复 Release 并在 finalize 时因 tag_name 冲突失败。
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes ""
+
   build:
+    needs: create-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
