@@ -243,11 +243,15 @@
 
 <div class="modal-mask" id="copy-mask">
   <div class="modal" style="max-width:480px">
-    <h3>任务已复制</h3>
-    <p id="copy-notice-text" style="font-size:14px;color:var(--muted)"></p>
+    <h3>复制任务</h3>
+    <p style="font-size:14px;color:var(--muted)">副本将默认禁用，并清空定时、监控与同步删除，避免与原任务冲突；保存后请修改输出目录等配置再启用。</p>
+    <div class="field" style="margin-top:12px">
+      <label>新任务 ID *</label>
+      <input id="copy-id" placeholder="movie-copy">
+    </div>
     <div class="actions">
-      <button class="btn" id="btn-copy-edit">立即编辑</button>
-      <button class="btn ghost" id="btn-copy-close">知道了</button>
+      <button class="btn" id="btn-copy-confirm">复制并编辑</button>
+      <button class="btn ghost" id="btn-copy-cancel">取消</button>
     </div>
   </div>
 </div>
@@ -425,12 +429,42 @@ $('btn-save-server').onclick = async () => {
 $('btn-new-task').onclick = () => openTaskModal(null);
 $('btn-cancel-task').onclick = () => $('modal-mask').classList.remove('show');
 $('modal-mask').onclick = e => { if (e.target === $('modal-mask')) $('modal-mask').classList.remove('show'); };
-$('btn-copy-edit').onclick = () => {
-  $('copy-mask').classList.remove('show');
-  if (copiedTask) openTaskModal(copiedTask);
-};
-$('btn-copy-close').onclick = () => $('copy-mask').classList.remove('show');
+// 复制任务弹窗：填写新 ID 后保存副本，并直接打开编辑表单
+let copySrc = null;
+function openCopyDialog(src) {
+  copySrc = src;
+  let newId = `${src.id}-copy`, n = 2;
+  while (config.tasks.some(t => t.id === newId)) newId = `${src.id}-copy-${n++}`;
+  $('copy-id').value = newId;
+  $('copy-mask').classList.add('show');
+  $('copy-id').focus();
+  $('copy-id').select();
+}
+$('btn-copy-cancel').onclick = () => $('copy-mask').classList.remove('show');
 $('copy-mask').onclick = e => { if (e.target === $('copy-mask')) $('copy-mask').classList.remove('show'); };
+$('btn-copy-confirm').onclick = async () => {
+  const btn = $('btn-copy-confirm');
+  const newId = $('copy-id').value.trim();
+  if (!newId) { toast('任务 ID 不能为空', true); return; }
+  if (config.tasks.some(t => t.id === newId)) { toast('任务 ID 已存在', true); return; }
+  const dup = JSON.parse(JSON.stringify(copySrc));
+  dup.id = newId;
+  dup.name = `${copySrc.name || copySrc.id} 副本`;
+  // 副本默认禁用，并清空定时/监控/同步删除，避免与原任务冲突
+  // （sync_delete 重叠会被后端 Validate 拒绝，必须关闭）
+  dup.enabled = false;
+  dup.sync_delete = false;
+  dup.cron = '';
+  dup.watch_interval = 0;
+  btn.disabled = true;
+  try {
+    await saveConfig({ tasks: [...config.tasks, dup] });
+    $('copy-mask').classList.remove('show');
+    toast('任务已复制');
+    refresh();
+    openTaskModal(dup);
+  } catch (err) { toast(err.message, true); btn.disabled = false; }
+};
 $('t-mode').onchange = () => {
   $('prefix-field').style.display = $('t-mode').value === 'path_replace' ? '' : 'none';
   $('public-url-field').style.display = $('t-mode').value === 'alist_url' ? '' : 'none';
@@ -438,16 +472,6 @@ $('t-mode').onchange = () => {
 $('t-dl-enable').onchange = () => {
   $('dl-field').style.display = $('t-dl-enable').checked ? '' : 'none';
 };
-
-// 复制成功后的提醒弹窗：提示用户修改副本配置后再启用
-let copiedTask = null;
-function openCopyNotice(task) {
-  copiedTask = task;
-  $('copy-notice-text').textContent =
-    `已复制为任务「${task.id}」。副本已禁用，并已清空定时、监控与同步删除；` +
-    `请修改输出目录等配置后再启用，避免与原任务冲突。`;
-  $('copy-mask').classList.add('show');
-}
 
 function openTaskModal(task) {
   editingId = task ? task.id : null;
@@ -548,25 +572,9 @@ $('task-list').onclick = async e => {
       refresh();
     } catch (err) { toast(err.message, true); btn.disabled = false; }
   } else if (copy) {
-    btn.disabled = true;
     const src = config.tasks.find(t => t.id === copy);
-    if (!src) { toast('未找到原任务', true); btn.disabled = false; return; }
-    const dup = JSON.parse(JSON.stringify(src));
-    let newId = `${src.id}-copy`, n = 2;
-    while (config.tasks.some(t => t.id === newId)) newId = `${src.id}-copy-${n++}`;
-    dup.id = newId;
-    dup.name = `${src.name || src.id} 副本`;
-    // 副本默认禁用，并清空定时/监控/同步删除，避免与原任务冲突
-    // （sync_delete 重叠会被后端 Validate 拒绝，必须关闭）
-    dup.enabled = false;
-    dup.sync_delete = false;
-    dup.cron = '';
-    dup.watch_interval = 0;
-    try {
-      await saveConfig({ tasks: [...config.tasks, dup] });
-      refresh();
-      openCopyNotice(dup);
-    } catch (err) { toast(err.message, true); btn.disabled = false; }
+    if (!src) { toast('未找到原任务', true); return; }
+    openCopyDialog(src);
   } else if (edit) {
     openTaskModal(tasks.find(t => t.id === edit));
   } else if (del) {
