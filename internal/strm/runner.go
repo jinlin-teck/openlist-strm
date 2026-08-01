@@ -697,10 +697,15 @@ func (r *Runner) RunIncremental(ctx context.Context, task config.TaskConfig, add
 	wg.Wait()
 
 	// removed：sync_delete 开启时删除本地对应 strm；关闭时仅记录。
+	// 存在任何失败项（列目录/生成/下载失败）时跳过删除：
+	// 与全量路径的 scanFailed 护栏同理，「同名替换」（removed 旧 + added 新）场景下
+	// 新文件生成失败时照旧删除会把用户仍需要的旧 strm 误清掉。
 	if len(removed) > 0 {
 		switch {
 		case !task.SyncDelete:
 			log.Info("检测到远端文件消失（sync_delete 关闭，仅记录）", "removed", len(removed))
+		case stats.Failed > 0:
+			log.Warn("本次运行存在失败项，已跳过同步删除以保护数据", "failed", stats.Failed)
 		case len(added) == 0 && oldTotal > 0 && len(removed) >= oldTotal:
 			log.Warn("远端文件全部消失，疑似远端异常，已跳过同步删除以保护数据", "removed", len(removed))
 		default:

@@ -278,8 +278,10 @@ func (c *Config) Normalize() {
 		if t.WatchInterval > 0 && t.WatchInterval < 10 {
 			t.WatchInterval = 10 // 防止过密轮询打爆服务器
 		}
-		// watch_mode 迁移：旧值 fingerprint / dir_count / 空统一为 tree_diff（唯一监控方式）。
-		if t.WatchMode != WatchTreeDiff {
+		// watch_mode 迁移：仅旧值 fingerprint / dir_count / 空统一为 tree_diff（唯一监控方式）；
+		// 其他值可能是拼写错误，原样保留，交给 Validate 报错。
+		switch t.WatchMode {
+		case "", "fingerprint", "dir_count":
 			t.WatchMode = WatchTreeDiff
 		}
 		if t.Download.Enable && t.Download.Concurrency <= 0 {

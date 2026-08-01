@@ -163,9 +163,10 @@ func watchKey(alistCfg config.AlistConfig, t config.TaskConfig) uint64 {
 }
 
 // watchTask 按间隔对源目录做树快照（tree_diff），与上次快照 diff 出新增/消失明细后
-// 增量触发任务。无持久化快照的监控（新建/配置变更）启动后立即探测一次：
+// 增量触发任务。无任何持久化快照的监控（新建/配置变更）启动后立即探测一次：
 // only_new 任务首次探测仅建立基线（存量不生成），其他任务首次探测触发一次全量运行；
-// 重启后若快照 hash 无变化则不触发。
+// 基线快照存在但监控状态（watch-state.json）丢失/被清理时，仍以快照为准 diff，
+// 状态缺失期间的新增文件不会被误当作存量。任务失败（含单文件失败）时快照不更新，下轮重试。
 func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *strm.Runner, key uint64) {
 	log := a.log.With("task", task.ID, "watch", config.WatchTreeDiff)
 	interval := time.Duration(task.WatchInterval) * time.Second
@@ -185,39 +186,47 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 			return // 快照无变化
 		}
 
-		if !hasLast {
-			// 首次探测：only_new 只建基线，其他任务触发一次全量运行。
+		// 失败判定：任务整体返回错误，或存在单文件失败（Runner 仅统计 Failed 不返回错误）。
+		// 任一种情况快照与指纹均不落盘，下轮探测会基于旧快照再次 diff 并重试。
+		failed := func(stats *strm.Stats, err error) bool {
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
+				}
+				return true
+			}
+			if stats != nil && stats.Failed > 0 {
+				log.Warn("任务存在失败项，快照暂不更新，将在下次探测时重试", "failed", stats.Failed)
+				return true
+			}
+			return false
+		}
+
+		old, hasSnapshot := a.snapshots.Load(task.ID, key)
+		if !hasSnapshot {
+			// 无任何基线快照：only_new 只建基线，其他任务触发一次全量运行。
 			if task.OnlyNew {
 				a.snapshots.Save(task.ID, key, entries)
 				a.state.Set(task.ID, key, fp)
 				log.Info("已建立基线快照，后续仅处理新增/变化的文件", "files", len(entries))
 				return
 			}
-			log.Info("首次探测，触发任务", "files", len(entries))
-			if _, err := a.RunTask(ctx, task.ID); err != nil {
-				if ctx.Err() == nil {
-					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
-				}
-				return // 快照不落盘，保留下轮重试机会
+			if hasLast {
+				log.Warn("旧树快照缺失或损坏，退化为全量运行")
+			} else {
+				log.Info("首次探测，触发任务", "files", len(entries))
+			}
+			stats, err := a.RunTask(ctx, task.ID)
+			if failed(stats, err) {
+				return
 			}
 			a.snapshots.Save(task.ID, key, entries)
 			a.state.Set(task.ID, key, fp)
 			return
 		}
 
-		// 有变化：加载旧快照做 diff。旧快照缺失/损坏时退化为全量运行。
-		old, ok := a.snapshots.Load(task.ID, key)
-		if !ok {
-			log.Warn("旧树快照缺失或损坏，退化为全量运行")
-			if _, err := a.RunTask(ctx, task.ID); err != nil {
-				if ctx.Err() == nil {
-					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
-				}
-				return
-			}
-			a.snapshots.Save(task.ID, key, entries)
-			a.state.Set(task.ID, key, fp)
-			return
+		if !hasLast {
+			log.Info("监控状态缺失但基线快照存在，按快照对比恢复", "files", len(old))
 		}
 		// 空快照保护：远端突然为空而旧快照非空，判定为远端异常（如网盘挂载掉线），
 		// 跳过本次变更，防止误判为「全部删除」而清空本地。
@@ -227,13 +236,11 @@ func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *str
 		}
 		added, removed := strm.DiffSnapshots(old, entries)
 		log.Info("检测到文件变化，触发增量任务", "added", len(added), "removed", len(removed))
-		if _, err := a.RunTaskIncremental(ctx, task.ID, added, removed, len(old)); err != nil {
-			if ctx.Err() == nil {
-				log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
-			}
-			return // 快照不落盘，保留下轮重试机会
+		stats, err := a.RunTaskIncremental(ctx, task.ID, added, removed, len(old))
+		if failed(stats, err) {
+			return
 		}
-		// 任务成功后才更新快照与指纹：失败时保持旧值，下轮探测会再次触发。
+		// 任务全部成功后才更新快照与指纹。
 		a.snapshots.Save(task.ID, key, entries)
 		a.state.Set(task.ID, key, fp)
 	}
@@ -318,9 +325,14 @@ func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
 		if err != nil {
 			return stats, err
 		}
-		// 任务成功后才更新基线快照：失败保留旧值，失败的文件下轮仍会被处理。
+		// 任务全部成功后才更新基线快照：失败（含单文件失败，Runner 仅统计 Failed）
+		// 保留旧基线，失败的文件不在基线内，下轮运行仍会被处理。
 		if task.OnlyNew {
-			a.snapshots.Save(taskID, key, entries)
+			if stats.Failed > 0 {
+				log.Warn("任务存在失败项，基线快照暂不更新，失败文件将在下次运行时重试", "failed", stats.Failed)
+			} else {
+				a.snapshots.Save(taskID, key, entries)
+			}
 		}
 		return stats, nil
 	})
