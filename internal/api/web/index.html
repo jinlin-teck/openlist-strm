@@ -248,6 +248,17 @@
   </div>
 </div>
 
+<div class="modal-mask" id="copy-mask">
+  <div class="modal" style="max-width:480px">
+    <h3>任务已复制</h3>
+    <p id="copy-notice-text" style="font-size:14px;color:var(--muted)"></p>
+    <div class="actions">
+      <button class="btn" id="btn-copy-edit">立即编辑</button>
+      <button class="btn ghost" id="btn-copy-close">知道了</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -341,6 +352,7 @@ function renderTasks() {
         <button class="btn sm" data-run="${esc(t.id)}" ${t.running || t.enabled === false ? 'disabled' : ''}>立即运行</button>
         <button class="btn sm ghost" data-toggle="${esc(t.id)}">${t.enabled === false ? '启用' : '禁用'}</button>
         <button class="btn sm ghost" data-edit="${esc(t.id)}">编辑</button>
+        <button class="btn sm ghost" data-copy="${esc(t.id)}">复制</button>
         <button class="btn sm danger" data-del="${esc(t.id)}">删除</button>
       </div>
     </div>`;
@@ -419,6 +431,12 @@ $('btn-save-server').onclick = async () => {
 $('btn-new-task').onclick = () => openTaskModal(null);
 $('btn-cancel-task').onclick = () => $('modal-mask').classList.remove('show');
 $('modal-mask').onclick = e => { if (e.target === $('modal-mask')) $('modal-mask').classList.remove('show'); };
+$('btn-copy-edit').onclick = () => {
+  $('copy-mask').classList.remove('show');
+  if (copiedTask) openTaskModal(copiedTask);
+};
+$('btn-copy-close').onclick = () => $('copy-mask').classList.remove('show');
+$('copy-mask').onclick = e => { if (e.target === $('copy-mask')) $('copy-mask').classList.remove('show'); };
 $('t-mode').onchange = () => {
   $('prefix-field').style.display = $('t-mode').value === 'path_replace' ? '' : 'none';
   $('public-url-field').style.display = $('t-mode').value === 'alist_url' ? '' : 'none';
@@ -426,6 +444,16 @@ $('t-mode').onchange = () => {
 $('t-dl-enable').onchange = () => {
   $('dl-field').style.display = $('t-dl-enable').checked ? '' : 'none';
 };
+
+// 复制成功后的提醒弹窗：提示用户修改副本配置后再启用
+let copiedTask = null;
+function openCopyNotice(task) {
+  copiedTask = task;
+  $('copy-notice-text').textContent =
+    `已复制为任务「${task.id}」。副本已禁用，并已清空定时、监控与同步删除；` +
+    `请修改输出目录等配置后再启用，避免与原任务冲突。`;
+  $('copy-mask').classList.add('show');
+}
 
 function openTaskModal(task) {
   editingId = task ? task.id : null;
@@ -509,7 +537,7 @@ $('btn-save-task').onclick = async () => {
 $('task-list').onclick = async e => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  const { run, edit, del, toggle } = btn.dataset;
+  const { run, edit, del, toggle, copy } = btn.dataset;
   if (run) {
     btn.disabled = true;
     try {
@@ -524,6 +552,26 @@ $('task-list').onclick = async e => {
       await saveConfig({ tasks: list });
       toast(list.find(t => t.id === toggle).enabled ? '任务已启用' : '任务已禁用');
       refresh();
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  } else if (copy) {
+    btn.disabled = true;
+    const src = config.tasks.find(t => t.id === copy);
+    if (!src) { toast('未找到原任务', true); btn.disabled = false; return; }
+    const dup = JSON.parse(JSON.stringify(src));
+    let newId = `${src.id}-copy`, n = 2;
+    while (config.tasks.some(t => t.id === newId)) newId = `${src.id}-copy-${n++}`;
+    dup.id = newId;
+    dup.name = `${src.name || src.id} 副本`;
+    // 副本默认禁用，并清空定时/监控/同步删除，避免与原任务冲突
+    // （sync_delete 重叠会被后端 Validate 拒绝，必须关闭）
+    dup.enabled = false;
+    dup.sync_delete = false;
+    dup.cron = '';
+    dup.watch_interval = 0;
+    try {
+      await saveConfig({ tasks: [...config.tasks, dup] });
+      refresh();
+      openCopyNotice(dup);
     } catch (err) { toast(err.message, true); btn.disabled = false; }
   } else if (edit) {
     openTaskModal(tasks.find(t => t.id === edit));
