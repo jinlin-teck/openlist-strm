@@ -203,18 +203,6 @@ func (c *Client) List(ctx context.Context, path string, refresh bool) ([]FsItem,
 	return data.Content, nil
 }
 
-// Total 返回目录直属子项数量（含文件和子目录），用于轻量变更检测。
-func (c *Client) Total(ctx context.Context, path string, refresh bool) (int, error) {
-	var data fsListData
-	err := c.do(ctx, http.MethodPost, "/api/fs/list", fsListReq{
-		Path: path, Refresh: refresh, Page: 1, PerPage: 1,
-	}, &data)
-	if err != nil {
-		return 0, err
-	}
-	return data.Total, nil
-}
-
 type fsGetReq struct {
 	Path     string `json:"path"`
 	Password string `json:"password"`

@@ -56,8 +56,7 @@ var cronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom
 
 // 监控方式。
 const (
-	WatchFingerprint = "fingerprint" // 递归扫描全部文件算指纹，能检出深层文件变化，适合本地存储
-	WatchDirCount    = "dir_count"   // 仅对比源目录直属子项数量，每次 1 次 API 调用，适合网盘存储
+	WatchTreeDiff = "tree_diff" // 树快照对比：递归快照 diff 出新增/删除/变更明细并增量执行（唯一监控方式）
 )
 
 // TaskConfig 描述一个 STRM 生成任务。
@@ -80,6 +79,7 @@ type TaskConfig struct {
 	Concurrency   int            `yaml:"concurrency" json:"concurrency"`
 	VideoExts     []string       `yaml:"video_exts" json:"video_exts"`   // 留空使用默认视频后缀
 	SyncDelete    bool           `yaml:"sync_delete" json:"sync_delete"` // 删除远端已不存在的本地 strm
+	OnlyNew       bool           `yaml:"only_new" json:"only_new"`       // 仅处理基线后新增/变化的文件；首次运行只建立基线快照，存量不生成
 	Download      DownloadConfig `yaml:"download" json:"download"`       // 伴生文件下载
 }
 
@@ -218,8 +218,8 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("task %q: public_url 必须以 http:// 或 https:// 开头", t.ID)
 			}
 		}
-		if t.WatchMode != "" && t.WatchMode != WatchFingerprint && t.WatchMode != WatchDirCount {
-			return fmt.Errorf("task %q: 非法 watch_mode %q", t.ID, t.WatchMode)
+		if t.WatchMode != "" && t.WatchMode != WatchTreeDiff {
+			return fmt.Errorf("task %q: 非法 watch_mode %q（当前仅支持 tree_diff）", t.ID, t.WatchMode)
 		}
 		if t.Cron != "" {
 			if _, err := cronParser.Parse(t.Cron); err != nil {
@@ -278,8 +278,9 @@ func (c *Config) Normalize() {
 		if t.WatchInterval > 0 && t.WatchInterval < 10 {
 			t.WatchInterval = 10 // 防止过密轮询打爆服务器
 		}
-		if t.WatchMode == "" {
-			t.WatchMode = WatchFingerprint
+		// watch_mode 迁移：旧值 fingerprint / dir_count / 空统一为 tree_diff（唯一监控方式）。
+		if t.WatchMode != WatchTreeDiff {
+			t.WatchMode = WatchTreeDiff
 		}
 		if t.Download.Enable && t.Download.Concurrency <= 0 {
 			t.Download.Concurrency = 5

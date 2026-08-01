@@ -10,7 +10,7 @@ import (
 // watchEntry 是单个任务持久化的监控状态。
 type watchEntry struct {
 	Key uint64 `json:"key"` // 监控配置指纹（watchKey），配置变更后旧状态自动作废
-	Fp  uint64 `json:"fp"`  // 上次探测到的远端指纹（dir_count 方式为子项数量）
+	Fp  uint64 `json:"fp"`  // 上次探测到的树快照 hash（条目明细在同目录 watch-snapshots/ 下）
 }
 
 // watchState 把各任务的上次监控指纹持久化到 JSON 文件（与 config.yaml 同目录的

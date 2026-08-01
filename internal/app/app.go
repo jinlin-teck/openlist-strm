@@ -45,6 +45,7 @@ type App struct {
 	watchCancels map[string]context.CancelFunc
 	watchKeys    map[string]uint64 // 各任务监控配置的指纹，用于热加载时判断是否需要重启监控
 	state        *watchState       // 持久化的上次监控指纹，避免重启后误触发全量扫描
+	snapshots    *snapshotStore    // 各任务的树快照（tree_diff 对比基准 + only_new 基线）
 
 	statusMu sync.Mutex
 	status   map[string]*TaskStatus
@@ -64,6 +65,7 @@ func New(cfgPath string, log *slog.Logger) (*App, error) {
 		watchCancels: map[string]context.CancelFunc{},
 		watchKeys:    map[string]uint64{},
 		state:        loadWatchState(filepath.Join(filepath.Dir(cfgPath), "watch-state.json"), log),
+		snapshots:    newSnapshotStore(filepath.Join(filepath.Dir(cfgPath), "watch-snapshots"), log),
 		status:       map[string]*TaskStatus{},
 	}
 	a.applyConfig(cfg)
@@ -119,7 +121,7 @@ func (a *App) applyConfig(cfg *config.Config) {
 		newCancels[t.ID] = cancel
 		newKeys[t.ID] = key
 		go a.watchTask(ctx, t, a.runner, key)
-		a.log.Info("注册变动监控", "task", t.ID, "interval", t.WatchInterval, "mode", t.WatchMode)
+		a.log.Info("注册变动监控", "task", t.ID, "interval", t.WatchInterval)
 	}
 	for _, cancel := range a.watchCancels { // 剩余的为已删除或配置变更的任务
 		cancel()
@@ -131,6 +133,17 @@ func (a *App) applyConfig(cfg *config.Config) {
 		keep[id] = true
 	}
 	a.state.Prune(keep)
+	// 树快照的保留范围：监控中的任务 ∪ 开启 only_new 的任务（后者无监控也需要基线）。
+	snapKeep := make(map[string]bool, len(newKeys))
+	for id := range newKeys {
+		snapKeep[id] = true
+	}
+	for _, t := range cfg.Tasks {
+		if t.OnlyNew {
+			snapKeep[t.ID] = true
+		}
+	}
+	a.snapshots.Prune(snapKeep)
 	a.watchMu.Unlock()
 }
 
@@ -149,45 +162,80 @@ func watchKey(alistCfg config.AlistConfig, t config.TaskConfig) uint64 {
 	return h.Sum64()
 }
 
-// watchTask 按间隔扫描远端目录指纹，变化时触发任务。无持久化状态的监控（新建/配置变更）启动后立即执行一次；
-// 重启后若能恢复上次指纹且远端无变化，则不触发。
+// watchTask 按间隔对源目录做树快照（tree_diff），与上次快照 diff 出新增/消失明细后
+// 增量触发任务。无持久化快照的监控（新建/配置变更）启动后立即探测一次：
+// only_new 任务首次探测仅建立基线（存量不生成），其他任务首次探测触发一次全量运行；
+// 重启后若快照 hash 无变化则不触发。
 func (a *App) watchTask(ctx context.Context, task config.TaskConfig, runner *strm.Runner, key uint64) {
-	log := a.log.With("task", task.ID, "watch", task.WatchMode)
+	log := a.log.With("task", task.ID, "watch", config.WatchTreeDiff)
 	interval := time.Duration(task.WatchInterval) * time.Second
 
-	// 按监控方式选择探测函数：递归指纹（本地存储）或目录计数（网盘存储）。
-	probe := runner.Fingerprint
-	if task.WatchMode == config.WatchDirCount {
-		probe = runner.DirCount
-	}
-
-	var last uint64
-	first := true
-	if fp, ok := a.state.Get(task.ID, key); ok {
-		last, first = fp, false
-		log.Debug("恢复上次监控指纹", "fingerprint", fp)
-	}
 	check := func() {
-		fp, err := probe(ctx, task)
+		entries, err := runner.Snapshot(ctx, task)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Warn("变更探测失败", "err", err)
 			}
 			return
 		}
-		if first || fp != last {
-			log.Info("检测到文件变化，触发任务")
+		fp := hashEntries(entries)
+		last, hasLast := a.state.Get(task.ID, key)
+
+		if hasLast && fp == last {
+			return // 快照无变化
+		}
+
+		if !hasLast {
+			// 首次探测：only_new 只建基线，其他任务触发一次全量运行。
+			if task.OnlyNew {
+				a.snapshots.Save(task.ID, key, entries)
+				a.state.Set(task.ID, key, fp)
+				log.Info("已建立基线快照，后续仅处理新增/变化的文件", "files", len(entries))
+				return
+			}
+			log.Info("首次探测，触发任务", "files", len(entries))
 			if _, err := a.RunTask(ctx, task.ID); err != nil {
 				if ctx.Err() == nil {
 					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
 				}
-				return // 指纹不落盘，保留下轮重试机会
+				return // 快照不落盘，保留下轮重试机会
 			}
-			// 任务成功后才记录指纹：失败时保持旧指纹，下轮探测会再次触发。
-			first = false
-			last = fp
+			a.snapshots.Save(task.ID, key, entries)
 			a.state.Set(task.ID, key, fp)
+			return
 		}
+
+		// 有变化：加载旧快照做 diff。旧快照缺失/损坏时退化为全量运行。
+		old, ok := a.snapshots.Load(task.ID, key)
+		if !ok {
+			log.Warn("旧树快照缺失或损坏，退化为全量运行")
+			if _, err := a.RunTask(ctx, task.ID); err != nil {
+				if ctx.Err() == nil {
+					log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
+				}
+				return
+			}
+			a.snapshots.Save(task.ID, key, entries)
+			a.state.Set(task.ID, key, fp)
+			return
+		}
+		// 空快照保护：远端突然为空而旧快照非空，判定为远端异常（如网盘挂载掉线），
+		// 跳过本次变更，防止误判为「全部删除」而清空本地。
+		if len(entries) == 0 && len(old) > 0 {
+			log.Warn("探测到远端为空而旧快照非空，疑似远端异常，已跳过本次变更")
+			return
+		}
+		added, removed := strm.DiffSnapshots(old, entries)
+		log.Info("检测到文件变化，触发增量任务", "added", len(added), "removed", len(removed))
+		if _, err := a.RunTaskIncremental(ctx, task.ID, added, removed, len(old)); err != nil {
+			if ctx.Err() == nil {
+				log.Warn("监控触发任务失败，将在下次探测时重试", "err", err)
+			}
+			return // 快照不落盘，保留下轮重试机会
+		}
+		// 任务成功后才更新快照与指纹：失败时保持旧值，下轮探测会再次触发。
+		a.snapshots.Save(task.ID, key, entries)
+		a.state.Set(task.ID, key, fp)
 	}
 
 	check() // 启动时先跑一次
@@ -235,14 +283,70 @@ func (a *App) NextRuns() map[string]time.Time {
 	return out
 }
 
-// RunTask 同步执行一次任务；同一任务并发执行会被拒绝。
+// RunTask 同步执行一次全量任务；同一任务并发执行会被拒绝。
+// only_new 任务无有效基线快照时，本次仅建立基线，不生成任何文件。
 func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
+	a.mu.RLock()
+	cfg := a.cfg
+	runner := a.runner
+	a.mu.RUnlock()
+
+	t := cfg.Task(taskID)
+	if t == nil {
+		return nil, fmt.Errorf("任务 %q 不存在", taskID)
+	}
+	key := watchKey(cfg.Alist, *t)
+
+	return a.executeTask(ctx, taskID, func(ctx context.Context, task config.TaskConfig, log *slog.Logger) (*strm.Stats, error) {
+		var baseline []string
+		if task.OnlyNew {
+			if old, ok := a.snapshots.Load(taskID, key); ok {
+				baseline = old
+			} else {
+				// 无基线：本次仅建立基线快照，存量不生成 strm。
+				entries, err := runner.Snapshot(ctx, task)
+				if err != nil {
+					return nil, fmt.Errorf("建立基线快照失败: %w", err)
+				}
+				a.snapshots.Save(taskID, key, entries)
+				log.Info("已建立基线快照，后续仅处理新增/变化的文件", "files", len(entries))
+				return &strm.Stats{Scanned: len(entries)}, nil
+			}
+		}
+		log.Info("任务开始", "source", task.SourceDir, "target", task.TargetDir, "mode", task.Mode)
+		stats, entries, err := runner.Run(ctx, task, baseline, log)
+		if err != nil {
+			return stats, err
+		}
+		// 任务成功后才更新基线快照：失败保留旧值，失败的文件下轮仍会被处理。
+		if task.OnlyNew {
+			a.snapshots.Save(taskID, key, entries)
+		}
+		return stats, nil
+	})
+}
+
+// RunTaskIncremental 依据 tree_diff 的 diff 结果同步执行一次增量任务；
+// 同一任务并发执行会被拒绝。
+func (a *App) RunTaskIncremental(ctx context.Context, taskID string, added, removed []string, oldTotal int) (*strm.Stats, error) {
+	a.mu.RLock()
+	runner := a.runner
+	a.mu.RUnlock()
+
+	return a.executeTask(ctx, taskID, func(ctx context.Context, task config.TaskConfig, log *slog.Logger) (*strm.Stats, error) {
+		log.Info("增量任务开始", "added", len(added), "removed", len(removed), "mode", task.Mode)
+		return runner.RunIncremental(ctx, task, added, removed, oldTotal, log)
+	})
+}
+
+// executeTask 是 RunTask / RunTaskIncremental 的共用骨架：
+// 校验任务存在与启用、同任务并发互斥、运行状态记录与日志。
+func (a *App) executeTask(ctx context.Context, taskID string, run func(ctx context.Context, task config.TaskConfig, log *slog.Logger) (*strm.Stats, error)) (*strm.Stats, error) {
 	if err := ctx.Err(); err != nil { // 热加载取消的旧监控可能带着已取消的 ctx 进入，直接拒绝
 		return nil, err
 	}
 	a.mu.RLock()
 	cfg := a.cfg
-	runner := a.runner
 	a.mu.RUnlock()
 
 	t := cfg.Task(taskID)
@@ -268,8 +372,7 @@ func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
 	a.statusMu.Unlock()
 
 	log := a.log.With("task", taskID)
-	log.Info("任务开始", "source", task.SourceDir, "target", task.TargetDir, "mode", task.Mode)
-	stats, err := runner.Run(ctx, task, log)
+	stats, err := run(ctx, task, log)
 
 	a.statusMu.Lock()
 	end := time.Now()
@@ -286,7 +389,8 @@ func (a *App) RunTask(ctx context.Context, taskID string) (*strm.Stats, error) {
 		log.Error("任务失败", "err", err)
 	} else {
 		log.Info("任务完成", "scanned", stats.Scanned, "created", stats.Created,
-			"skipped", stats.Skipped, "deleted", stats.Deleted, "downloaded", stats.Downloaded, "failed", stats.Failed)
+			"skipped", stats.Skipped, "deleted", stats.Deleted, "downloaded", stats.Downloaded,
+			"failed", stats.Failed, "baseline_skipped", stats.BaselineSkipped)
 	}
 	return stats, err
 }

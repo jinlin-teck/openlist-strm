@@ -10,6 +10,7 @@ dist/
 
 # 运行时生成的监控状态
 watch-state.json
+watch-snapshots/
 
 # 本地部署脚本（含 Portainer API Key，勿提交）
 install-local.sh

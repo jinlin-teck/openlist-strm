@@ -13,8 +13,8 @@ tasks:
     enabled: true                         # 是否启用；禁用后定时/监控/手动均不会运行
     cron: "0 0 3 * * *"                   # 6 段 cron（秒 分 时 日 月 星期），留空则仅手动触发
     watch_interval: 0                     # 变动监控间隔（秒），0 关闭；检测到远端变化后自动生成（最小 10）
-    watch_mode: "fingerprint"             # 监控方式：fingerprint 递归指纹（本地存储，能检出深层变动）
-                                          #            dir_count 目录计数（网盘存储，每轮仅 1 次 API 请求，防风控）
+    watch_mode: "tree_diff"               # 监控方式：tree_diff 树快照对比（唯一方式；diff 出新增/删除/变更明细并增量执行）
+                                          #            每轮需递归列出源目录全部文件，尽量不要监控过大的网盘目录
     source_dir: "/nas/movies"             # OpenList 上的源目录
     target_dir: "/media/movies"           # 本地 strm 输出目录
     mode: "path_replace"                  # strm 内容模式：alist_url（默认）/ raw_url / alist_path / path_replace
@@ -27,6 +27,7 @@ tasks:
     concurrency: 50                       # 并发处理数
     video_exts: []                        # 视频后缀，留空使用默认列表
     sync_delete: false                    # 是否删除远端已不存在的本地 strm（扫描为 0 或存在失败项时自动跳过；多任务共用 target_dir 时禁止开启）
+    only_new: false                       # 仅处理基线后新增/变化的文件；开启后首次运行只建立基线快照（存量不生成 strm）
     download:                             # 伴生文件下载
       enable: false
       subtitle: false                     # 字幕：.ass .srt .ssa .sub
