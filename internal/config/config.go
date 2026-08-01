@@ -228,17 +228,18 @@ func (c *Config) Validate() error {
 		}
 	}
 	// 开启 sync_delete 的任务会删除 target_dir 下不属于自己的 strm，
-	// 目标目录互相重叠时会误删其他任务的产物，必须禁止。
+	// 与任何其他启用中的任务目录重叠（无论对方是否开启 sync_delete）都会误删其产物，必须禁止。
+	// 禁用的任务不参与校验：其不会运行，重新启用时需再次保存并触发本校验。
 	for i := range c.Tasks {
-		if !c.Tasks[i].SyncDelete {
+		if !c.Tasks[i].SyncDelete || !c.Tasks[i].IsEnabled() {
 			continue
 		}
-		for j := i + 1; j < len(c.Tasks); j++ {
-			if !c.Tasks[j].SyncDelete {
+		for j := range c.Tasks {
+			if i == j || !c.Tasks[j].IsEnabled() {
 				continue
 			}
 			if pathOverlap(c.Tasks[i].TargetDir, c.Tasks[j].TargetDir) {
-				return fmt.Errorf("task %q 与 %q 均开启 sync_delete 且 target_dir 重叠（%s 与 %s），会互相误删",
+				return fmt.Errorf("task %q 开启了 sync_delete，与 task %q 的 target_dir 重叠（%s 与 %s），会误删其产物",
 					c.Tasks[i].ID, c.Tasks[j].ID, c.Tasks[i].TargetDir, c.Tasks[j].TargetDir)
 			}
 		}

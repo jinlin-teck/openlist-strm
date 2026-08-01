@@ -19,7 +19,7 @@ import (
 )
 
 // Version 是应用版本号，发布时随 git tag 同步更新。
-const Version = "1.3.0"
+const Version = "1.3.1"
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
@@ -76,7 +76,11 @@ func main() {
 	case s := <-sig:
 		log.Info("收到退出信号", "signal", s.String())
 	case err := <-errCh:
+		// 服务已无法对外提供，以非零码退出让 Docker/systemd 的 on-failure 策略感知并重启。
+		// os.Exit 不执行 defer，需显式关闭调度与监控。
 		log.Error("HTTP 服务异常退出", "err", err)
+		a.Close()
+		os.Exit(1)
 	}
 
 	// 优雅退出：停止接收新请求并等待在途请求结束（最多 5 秒），再由 defer 关闭调度与监控。

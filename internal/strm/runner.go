@@ -403,8 +403,14 @@ func (r *Runner) downloadOne(ctx context.Context, task config.TaskConfig, basePa
 		return false, err
 	}
 	n, err := io.Copy(f, io.LimitReader(resp.Body, 512<<20))
-	if err == nil && item.Size > 0 && n != item.Size {
-		err = fmt.Errorf("下载大小不符: 期望 %d 字节，实际 %d 字节", item.Size, n)
+	if err == nil {
+		switch {
+		case item.Size > 0 && n != item.Size:
+			err = fmt.Errorf("下载大小不符: 期望 %d 字节，实际 %d 字节", item.Size, n)
+		case item.Size <= 0 && n == 512<<20:
+			// 远端未提供大小时无法校验完整性，达到上限即视为被截断
+			err = fmt.Errorf("远端未提供文件大小且下载达到 512MB 上限，文件可能被截断")
+		}
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
@@ -704,6 +710,12 @@ func (r *Runner) RunIncremental(ctx context.Context, task config.TaskConfig, add
 	// 与全量路径的 scanFailed 护栏同理，「同名替换」（removed 旧 + added 新）场景下
 	// 新文件生成失败时照旧删除会把用户仍需要的旧 strm 误清掉。
 	if len(removed) > 0 {
+		// 同名替换（大小变化）的文件同时出现在 added 与 removed 中，
+		// added 阶段已重新生成或保留其 strm，不能再按删除处理。
+		addedPaths := make(map[string]struct{}, len(added))
+		for _, e := range added {
+			addedPaths[entryPath(e)] = struct{}{}
+		}
 		switch {
 		case !task.SyncDelete:
 			log.Info("检测到远端文件消失（sync_delete 关闭，仅记录）", "removed", len(removed))
@@ -714,6 +726,9 @@ func (r *Runner) RunIncremental(ctx context.Context, task config.TaskConfig, add
 		default:
 			for _, e := range removed {
 				full := entryPath(e)
+				if _, ok := addedPaths[full]; ok {
+					continue // 同名替换：新增阶段已处理，跳过删除
+				}
 				if !exts[strings.ToLower(path.Ext(full))] {
 					continue // 伴生文件不删除（与全量 sync_delete 行为一致）
 				}

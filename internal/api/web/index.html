@@ -436,6 +436,8 @@ function openCopyDialog(src) {
   let newId = `${src.id}-copy`, n = 2;
   while (config.tasks.some(t => t.id === newId)) newId = `${src.id}-copy-${n++}`;
   $('copy-id').value = newId;
+  // 上次复制成功后按钮仍处禁用态，打开弹窗时复位
+  $('btn-copy-confirm').disabled = false;
   $('copy-mask').classList.add('show');
   $('copy-id').focus();
   $('copy-id').select();
@@ -451,7 +453,7 @@ $('btn-copy-confirm').onclick = async () => {
   dup.id = newId;
   dup.name = `${copySrc.name || copySrc.id} 副本`;
   // 副本默认禁用，并清空定时/监控/同步删除，避免与原任务冲突
-  // （sync_delete 重叠会被后端 Validate 拒绝，必须关闭）
+  // （副本启用时若 target_dir 仍与开启 sync_delete 的任务重叠，会被后端 Validate 拒绝）
   dup.enabled = false;
   dup.sync_delete = false;
   dup.cron = '';
