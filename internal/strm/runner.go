@@ -115,7 +115,10 @@ func (r *Runner) Run(ctx context.Context, task config.TaskConfig, baseline []str
 		dir := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		items, err := r.client.List(ctx, dir, false)
+		// refresh=true：手动/cron 触发的全量运行必须看到上游最新状态，
+		// 否则 OpenList 缓存未过期时新增文件扫不出来（only_new 任务尤其致命，
+		// 它要处理的正是基线之后新增的文件）；监控增量路径不受影响（探测已刷新）。
+		items, err := r.client.List(ctx, dir, true)
 		if err != nil {
 			log.Warn("列目录失败，跳过", "dir", dir, "err", err)
 			mu.Lock()

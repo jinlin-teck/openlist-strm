@@ -22,7 +22,7 @@
   - 定时：6 段 cron（秒 分 时 日 月 星期）
   - 手动：WebUI 按钮或 API 触发指定任务
   - 变动监控：按 `watch_interval` 轮询，检测到变化才自动生成（见下文「变动监控」）
-- **WebUI**：修改全部配置（热加载，无需重启）、查看运行状态与统计、手动运行任务、启用/禁用任务（禁用后任何方式都不会运行）
+- **WebUI**：修改全部配置（热加载，无需重启）、查看运行状态与统计、手动运行任务、启用/禁用任务（禁用后任何方式都不会运行）、复制任务（副本默认禁用并清空定时/监控/同步删除，避免与原任务冲突）
 - 并发扫描、断点跳过（`overwrite: false` 时跳过已存在文件）、可选同步删除（扫描为 0 或存在失败项时自动跳过，防误删）
 - 变动监控基于树快照对比（tree_diff）：diff 出新增/删除/变更明细后**增量执行**（只处理变化的文件），快照持久化（`watch-snapshots/`），服务/容器重启或热加载后不会重复全量扫描
 - 可选「仅处理新增」（`only_new`）：任务首次运行只建立基线快照，之后只为基线后新增/变化的文件生成 strm，适合不想回溯存量的媒体库
@@ -127,29 +127,29 @@ WantedBy=multi-user.target
 
 见 `config.example.yaml`。关键字段：
 
-| 字段                                        | 说明                                                                         |
-| ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `server.listen`                             | WebUI/API 监听地址，默认 `:8080`                                             |
-| `alist.base_url` / `alist.token`            | OpenList 地址与令牌                                                          |
-| `alist.wait_time`                           | API 请求最小间隔（毫秒），0 不限速                                           |
-| `alist.user_agent`                          | HTTP User-Agent，默认浏览器 UA；115 等网盘按 UA 校验下载签名，勿填 Go/curl UA |
-| `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                         |
-| `tasks[].mode`                              | `alist_url`（默认）/ `raw_url` / `alist_path` / `path_replace`，详见「STRM 内容模式」 |
-| `tasks[].public_url`                        | `alist_url` 模式下把直链域名替换为该公网地址（内网取链、公网播放），留空不替换 |
-| `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas` |
-| `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径，或另一个 OpenList 域名前缀 |
-| `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`               |
+| 字段                                        | 说明                                                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.listen`                             | WebUI/API 监听地址，默认 `:8080`                                                                                                                               |
+| `alist.base_url` / `alist.token`            | OpenList 地址与令牌                                                                                                                                            |
+| `alist.wait_time`                           | API 请求最小间隔（毫秒），0 不限速                                                                                                                             |
+| `alist.user_agent`                          | HTTP User-Agent，默认浏览器 UA；115 等网盘按 UA 校验下载签名，勿填 Go/curl UA                                                                                  |
+| `tasks[].source_dir` / `tasks[].target_dir` | OpenList 源目录 / 本地 strm 输出目录                                                                                                                           |
+| `tasks[].mode`                              | `alist_url`（默认）/ `raw_url` / `alist_path` / `path_replace`，详见「STRM 内容模式」                                                                          |
+| `tasks[].public_url`                        | `alist_url` 模式下把直链域名替换为该公网地址（内网取链、公网播放），留空不替换                                                                                 |
+| `tasks[].url_prefix`                        | `path_replace` 模式下被替换的 URL 前缀，如 `https://alist.example.com/d/nas`                                                                                   |
+| `tasks[].prefix_to`                         | 前缀替换为，留空即仅去除；可填 `/mnt/rclone/nas` 等挂载路径，或另一个 OpenList 域名前缀                                                                        |
+| `tasks[].url_encode`                        | 路径是否 URL 编码，默认 `true`；生成本地明文路径时设为 `false`                                                                                                 |
 | `tasks[].with_sign`                         | `path_replace` 模式下 URL 末尾是否附加签名（`?sign=`），默认 `false`；`prefix_to` 仍是 http(s) URL 时开启，替换为本地/挂载路径时保持 `false`（否则路径不存在） |
-| `tasks[].cron`                              | 6 段 cron，留空则仅手动触发                                                  |
-| `tasks[].enabled`                           | 是否启用任务，默认 `true`；禁用后定时/监控/手动触发均不会运行                |
-| `tasks[].watch_interval`                    | 变动监控间隔（秒），0 关闭，最小 10；检测到变化才触发生成                    |
-| `tasks[].watch_mode`                        | 固定为 `tree_diff`（树快照对比，唯一监控方式），见下文「变动监控」           |
-| `tasks[].only_new`                          | 仅处理基线后新增/变化的文件，默认 `false`；开启后首次运行只建立基线快照（存量不生成 strm） |
-| `tasks[].overwrite`                         | 覆盖已存在的 strm / 伴生文件，默认 `false`（strm 存在即跳过；伴生文件存在且大小一致才跳过） |
-| `tasks[].concurrency`                       | 任务并发处理数，默认 50                                                      |
-| `tasks[].video_exts`                        | 视频后缀列表，留空用默认（mp4/mkv/flv/avi/wmv/ts/rmvb/webm/mpg/m2ts/mov）    |
-| `tasks[].sync_delete`                       | 删除远端已不存在的本地 strm（扫描为 0 或存在失败项时自动跳过；多任务 target_dir 不得重叠） |
-| `tasks[].download`                          | 伴生文件下载：`enable`/`subtitle`/`image`/`nfo`/`other_ext`/`concurrency`    |
+| `tasks[].cron`                              | 6 段 cron，留空则仅手动触发                                                                                                                                    |
+| `tasks[].enabled`                           | 是否启用任务，默认 `true`；禁用后定时/监控/手动触发均不会运行                                                                                                  |
+| `tasks[].watch_interval`                    | 变动监控间隔（秒），0 关闭，最小 10；检测到变化才触发生成                                                                                                      |
+| `tasks[].watch_mode`                        | 固定为 `tree_diff`（树快照对比，唯一监控方式），见下文「变动监控」                                                                                             |
+| `tasks[].only_new`                          | 仅处理基线后新增/变化的文件，默认 `false`；开启后首次运行只建立基线快照（存量不生成 strm）                                                                     |
+| `tasks[].overwrite`                         | 覆盖已存在的 strm / 伴生文件，默认 `false`（strm 存在即跳过；伴生文件存在且大小一致才跳过）                                                                    |
+| `tasks[].concurrency`                       | 任务并发处理数，默认 50                                                                                                                                        |
+| `tasks[].video_exts`                        | 视频后缀列表，留空用默认（mp4/mkv/flv/avi/wmv/ts/rmvb/webm/mpg/m2ts/mov）                                                                                      |
+| `tasks[].sync_delete`                       | 删除远端已不存在的本地 strm（扫描为 0 或存在失败项时自动跳过；多任务 target_dir 不得重叠）                                                                     |
+| `tasks[].download`                          | 伴生文件下载：`enable`/`subtitle`/`image`/`nfo`/`other_ext`/`concurrency`                                                                                      |
 
 ## 变动监控
 
@@ -157,7 +157,8 @@ OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https
 
 - 每轮递归列出源目录全部受管文件（视频 + 伴生），生成「路径+大小」的有序快照，与上次快照 diff 出**新增 / 删除 / 变更（大小变化）**明细
 - 有变化时**增量执行任务**：只为新增/变化的文件生成 strm（按父目录分组补取签名，通常新增集中在少数目录，API 开销很小）；`sync_delete` 开启时删除已消失文件的本地 strm，不再全量重扫
-- 快照使用 `refresh=true` 绕过服务端缓存；网盘存储会强制回源列表，请把 `watch_interval` 调大（如 1800s），且尽量不要监控过大的网盘目录
+- 快照探测使用 `refresh=true` 绕过服务端缓存，手动/定时触发的全量运行同样强制刷新；网盘存储会强制回源列表，请把 `watch_interval` 调大（如 1800s），且尽量不要监控过大的网盘目录
+- 定时/手动触发始终执行全量扫描（`only_new` 任务按基线过滤存量），只有监控触发才是 diff 后的增量执行
 - 安全护栏：新快照为空而旧快照非空（疑似远端异常）时跳过本次变更；任务失败时快照不更新，下轮自动重试
 - 监控触发与定时/手动触发共用任务锁，同一任务不会并发执行
 - 启动 watcher 后会立即探测一次：此前无快照时全量执行一次任务（开启 `only_new` 的任务则只建立基线）；热加载配置时只重启配置有变化的 watcher，未变更的任务不会重跑
@@ -169,14 +170,16 @@ OpenList/Alist 没有文件变更通知 API（webhook 仍在[讨论阶段](https
 
 开启 `only_new` 的任务以「首次探测/运行时的远端文件树」为基线：基线内的存量文件永远不生成 strm，只有基线之后新增或大小变化的文件才会生成。适合媒体库已有大量存量、只想追更的场景。基线快照与监控快照共用同一文件，任务成功后才更新，失败会在下轮重试。
 
+`only_new` 不依赖监控：不开 `watch_interval` 时，手动/定时运行同样生效——仍做一次全量扫描，但基线内的存量文件会被跳过，只为基线外的新增/变化文件生成 strm。
+
 ## STRM 内容模式
 
-| 模式           | strm 内容                                 | 用途与特点                                                                                    |
-| -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `alist_url`    | 完整的 OpenList HTTP/HTTPS 直链（带签名） | 可直接播放；配合 `public_url` 可内网取链、公网播放；播放流量完全通过 OpenList                 |
+| 模式           | strm 内容                                 | 用途与特点                                                                                                                               |
+| -------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `alist_url`    | 完整的 OpenList HTTP/HTTPS 直链（带签名） | 可直接播放；配合 `public_url` 可内网取链、公网播放；播放流量完全通过 OpenList                                                            |
 | `raw_url`      | 上游网盘的真实 CDN 链接                   | 流量不通过 OpenList；本身已是可直连地址，若再配合 302 跳转工具可让客户端直接从 CDN 播放，绕开服务端（每次运行多一次 `/api/fs/get` 调用） |
-| `alist_path`   | OpenList 内部路径（去掉域名前缀与签名）   | 适用于 CloudDrive2、rclone 等挂载到本地后，按该内部路径直接播放                               |
-| `path_replace` | 替换 URL 前缀后得到的路径或链接           | 可生成不带签名的 OpenList HTTP/HTTPS 链接，或生成 CloudDrive2、rclone 等挂载后的本地路径，也支持多网盘路径转换 |
+| `alist_path`   | OpenList 内部路径（去掉域名前缀与签名）   | 适用于 CloudDrive2、rclone 等挂载到本地后，按该内部路径直接播放                                                                          |
+| `path_replace` | 替换 URL 前缀后得到的路径或链接           | 可生成不带签名的 OpenList HTTP/HTTPS 链接，或生成 CloudDrive2、rclone 等挂载后的本地路径，也支持多网盘路径转换                           |
 
 `path_replace` 模式示例：
 
